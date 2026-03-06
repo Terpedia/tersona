@@ -1,0 +1,83 @@
+---
+import Layout from '../layouts/Layout.astro';
+import { terpenePersonas } from '../data/terpenes';
+---
+
+<Layout title="Tersona - Talk to Terpenes">
+  <main class="container mx-auto px-4 py-8">
+    <header class="text-center mb-12">
+      <h1 class="text-5xl font-bold text-green-900 mb-4">
+        🌿 Tersona
+      </h1>
+      <p class="text-xl text-green-700 mb-2">
+        Voice-powered terpene personas
+      </p>
+      <p class="text-gray-600">
+        Choose a terpene to chat with and discover their unique personality, origin, and therapeutic properties
+      </p>
+    </header>
+
+    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 max-w-7xl mx-auto">
+      {terpenePersonas.map(terpene => (
+        <a
+          href={`/chat/${terpene.id}`}
+          class="block group"
+        >
+          <div
+            class="rounded-2xl shadow-lg hover:shadow-2xl transition-all duration-300 transform hover:-translate-y-2 p-6 h-full"
+            style={`background: linear-gradient(135deg, ${terpene.backgroundColor} 0%, ${terpene.backgroundColor}dd 100%);`}
+          >
+            <div class="flex items-start justify-between mb-4">
+              <div class="text-5xl">{terpene.emoji}</div>
+              <div class="text-xs bg-white/50 px-2 py-1 rounded-full text-gray-700">
+                {terpene.region}
+              </div>
+            </div>
+            
+            <h2 class="text-2xl font-bold text-gray-900 mb-2 group-hover:text-green-800 transition-colors">
+              {terpene.name}
+            </h2>
+            
+            <p class="text-sm text-gray-600 mb-1 font-mono">
+              {terpene.chemicalFormula}
+            </p>
+            
+            <p class="text-sm text-gray-700 mb-4 line-clamp-3">
+              {terpene.personality}
+            </p>
+            
+            <div class="flex flex-wrap gap-2 mb-4">
+              {terpene.traits.slice(0, 3).map(trait => (
+                <span class="text-xs bg-white/60 px-2 py-1 rounded-full text-gray-700">
+                  {trait}
+                </span>
+              ))}
+            </div>
+            
+            <div class="text-sm text-green-800 font-medium group-hover:text-green-900">
+              Start conversation →
+            </div>
+          </div>
+        </a>
+      ))}
+    </div>
+
+    <footer class="text-center mt-16 text-gray-600">
+      <p class="mb-2">
+        Part of <a href="https://terpedia.com" target="_blank" rel="noopener noreferrer" class="text-green-700 hover:text-green-900 font-medium">Terpedia.com</a>
+      </p>
+      <p class="text-sm">
+        Powered by Google Gemini AI • STT/LLM/TTS Integration
+      </p>
+    </footer>
+  </main>
+</Layout>
+
+<style>
+  .line-clamp-3 {
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+</style>

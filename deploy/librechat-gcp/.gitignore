@@ -1,0 +1,29 @@
+# Don't commit sensitive files
+.env
+auth.json
+*.key
+*.pem
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+
+# Docker
+.dockerignore
+
+# Data directories
+data-node/
+meili_data/
+uploads/
+logs/
+images/
+
+# Terraform
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/.terraform.lock.hcl
+terraform/terraform.tfvars

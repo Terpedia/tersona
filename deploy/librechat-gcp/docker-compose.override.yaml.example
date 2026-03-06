@@ -1,0 +1,10 @@
+# Copy to docker-compose.override.yaml and adjust paths / env as needed.
+# Use this to mount librechat.yaml and add RAG/vector DB if desired.
+
+services:
+  api:
+    environment:
+      - DOMAIN_CLIENT=chat.tersona.terpedia.com
+      - VITE_SHARED_DOMAIN=true
+    volumes:
+      - ./librechat.yaml:/app/librechat.yaml:ro

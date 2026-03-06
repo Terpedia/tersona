@@ -1,0 +1,77 @@
+# Base LibreChat stack — use docker-compose.override.yaml for local overrides.
+# From: https://github.com/danny-avila/LibreChat (adjust image tags as needed)
+
+services:
+  api:
+    container_name: LibreChat
+    ports:
+      - "${PORT:-3080}:${PORT:-3080}"
+    depends_on:
+      - mongodb
+      - meilisearch
+      - speech-bridge
+    image: ghcr.io/danny-avila/librechat:latest
+    restart: always
+    user: "${UID:-1000}:${GID:-1000}"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      HOST: "0.0.0.0"
+      MONGO_URI: "mongodb://mongodb:27017/LibreChat"
+      MEILI_HOST: "http://meilisearch:7700"
+      CONTINUE_ON_UNCAUGHT_EXCEPTION: "true"
+      # Base64 to avoid Docker/Compose stripping https:// from URLs
+      DOMAIN_CLIENT_B64: "aHR0cHM6Ly9jaGF0LnRlcnNvbmEudGVycGVkaWEuY29t"
+    command: ["sh", "-c", "export DOMAIN_CLIENT=$$(echo $$DOMAIN_CLIENT_B64 | base64 -d) && export DOMAIN_SERVER=$$DOMAIN_CLIENT && exec node api/server/index.js"]
+    volumes:
+      - type: bind
+        source: ./.env
+        target: /app/.env
+      - ./images:/app/client/public/images
+      - ./uploads:/app/uploads
+      - ./logs:/app/logs
+      # Mount librechat.yaml so TerpeneQueen and speech config are loaded
+      - ./librechat.yaml:/app/librechat.yaml:ro
+
+  speech-bridge:
+    container_name: speech-bridge
+    build:
+      context: ./speech-bridge
+      dockerfile: Dockerfile
+    restart: always
+    ports:
+      - "8001:8001"
+    environment:
+      - GOOGLE_CLOUD_PROJECT=${GOOGLE_CLOUD_PROJECT}
+      - DEFAULT_TTS_VOICE=en-US-Neural2-F
+      # When Susan's custom voice is ready, uncomment:
+      # - CUSTOM_VOICE_NAME=custom-susan-trapp-terpenequeen
+    volumes:
+      # Mount Google Cloud service account credentials
+      # Option 1: If you have auth.json for Vertex AI, use it here too
+      - ./auth.json:/app/auth.json:ro
+    # Set credentials path
+    command: sh -c "export GOOGLE_APPLICATION_CREDENTIALS=/app/auth.json && uvicorn main:app --host 0.0.0.0 --port 8001"
+
+  mongodb:
+    container_name: chat-mongodb
+    image: mongo:7
+    restart: always
+    user: "${UID:-1000}:${GID:-1000}"
+    volumes:
+      - ./data-node:/data/db
+    command: mongod --noauth
+
+  meilisearch:
+    container_name: chat-meilisearch
+    image: getmeili/meilisearch:v1.11
+    restart: always
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      - MEILI_HOST=http://meilisearch:7700
+      - MEILI_NO_ANALYTICS=true
+      - MEILI_MASTER_KEY=${MEILI_MASTER_KEY:-}
+    volumes:
+      - ./meili_data:/meili_data
+
+volumes: {}

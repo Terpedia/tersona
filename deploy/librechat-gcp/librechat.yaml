@@ -1,0 +1,39 @@
+# LibreChat config for chat.tersona.terpedia.com
+# TerpeneQueen (Susan Trapp, PhD) — add via Agent Builder in UI or as OpenAI Assistant; see docs/TERPENEQUEEN.md
+
+version: 1.2.9
+cache: true
+
+# Speech: STT/TTS using Google Cloud Speech via our FastAPI bridge
+# The bridge translates OpenAI-format requests to Google Cloud APIs
+speech:
+  tts:
+    openai:
+      # Point to our speech-bridge service instead of OpenAI
+      apiKey: "not-used-by-bridge"
+      baseURL: "http://speech-bridge:8001"
+      model: "tts-1"
+      # Voice mapping: alloy, nova, susan (maps to Google voices in bridge)
+      voices: ["alloy", "echo", "nova", "susan"]
+  stt:
+    openai:
+      # Point to our speech-bridge service instead of OpenAI
+      apiKey: "not-used-by-bridge"
+      baseURL: "http://speech-bridge:8001"
+      model: "whisper-1"
+  speechTab:
+    conversationMode: true
+    speechToText: true
+    textToSpeech:
+      engineTTS: "openai"
+      voice: "nova"
+      automaticPlayback: true
+      playbackRate: 1.0
+
+# Endpoints: ensure OpenAI (and others you use) are enabled. TerpeneQueen uses an OpenAI-compatible model.
+endpoints:
+  agents:
+    disableBuilder: false
+    allowedProviders:
+      - openAI
+      - google

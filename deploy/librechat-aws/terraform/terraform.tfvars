@@ -1,0 +1,5 @@
+aws_profile   = "terpedia"
+region        = "us-east-1"
+domain        = "chat.tersona.terpedia.com"
+instance_type = "t3.xlarge"
+key_name      = "librechat-key"

@@ -1,0 +1,7 @@
+# Minimal LibreChat config for debugging
+version: 1.2.9
+cache: true
+
+endpoints:
+  agents:
+    disableBuilder: false
