@@ -25,15 +25,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Initialize Speech clients
-speech_client = speech_v1.SpeechClient()
-tts_client = texttospeech_v1.TextToSpeechClient()
+# Initialize Speech clients lazily
+speech_client = None
+tts_client = None
+
+def get_speech_client():
+    global speech_client
+    if speech_client is None:
+        speech_client = speech_v1.SpeechClient()
+    return speech_client
+
+def get_tts_client():
+    global tts_client
+    if tts_client is None:
+        tts_client = texttospeech_v1.TextToSpeechClient()
+    return tts_client
 
 
 @app.get("/health")
 async def health():
     """Health check"""
-    return {"status": "ok", "service": "stt-tts-only"}
+    try:
+        # Test that clients can be initialized
+        get_speech_client()
+        get_tts_client()
+        return {"status": "ok", "service": "stt-tts-only"}
+    except Exception as e:
+        return {"status": "error", "service": "stt-tts-only", "error": str(e)}, 500
 
 
 @app.post("/api/stt")
@@ -70,7 +88,8 @@ async def speech_to_text(
         audio = speech_v1.RecognitionAudio(content=audio_content)
         
         # Perform transcription
-        response = speech_client.recognize(config=config, audio=audio)
+        client = get_speech_client()
+        response = client.recognize(config=config, audio=audio)
         
         # Extract transcript
         transcript = ""
@@ -117,7 +136,8 @@ async def text_to_speech(
         )
         
         # Perform synthesis
-        response = tts_client.synthesize_speech(
+        client = get_tts_client()
+        response = client.synthesize_speech(
             input=input_text,
             voice=voice_config,
             audio_config=audio_config,
