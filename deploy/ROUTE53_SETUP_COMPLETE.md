@@ -20,8 +20,8 @@ ns-811.awsdns-37.net
 
 | Record | Type | Value | Purpose |
 |--------|------|-------|---------|
-| chat.tersona.terpedia.com | A | 34.110.252.202 | Points to GCP Load Balancer |
-| tersona.terpedia.com | CNAME | chat.tersona.terpedia.com | Alias to chat subdomain |
+| ~~chat.tersona.terpedia.com~~ | ~~A~~ | ~~34.110.252.202~~ | ~~Points to GCP Load Balancer~~ (REMOVED - no longer using LibreChat on GCP) |
+| tersona.terpedia.com | CNAME | Terpedia.github.io | Points to GitHub Pages |
 
 ## 🌐 How to Complete DNS Setup
 
@@ -54,38 +54,41 @@ aws route53 delete-hosted-zone --profile terpedia --id Z1008515TFY6OXJW5Z47
 
 **Recommendation**: Use **Option 1** if terpedia.com is already working on SiteGround. Less disruption.
 
-## ✅ LibreChat Status
+## ✅ Current Architecture
 
-**Services Running on GCP:**
-- ✅ LibreChat API (port 3080)
-- ✅ MongoDB (database)
-- ✅ Meilisearch (search)
-- ✅ Speech-bridge (Google STT/TTS)
+**Frontend (GitHub Pages):**
+- ✅ Static site at `tersona.terpedia.com`
+- ✅ Multi-terpene panel chat interface
+- ✅ Text and voice chat modes
 
-**GCP Load Balancer IP**: 34.110.252.202  
-**SSL Certificate**: Google-managed (will provision after DNS)
+**Backend (Cloud Run):**
+- Deploy separately using `api/vertex-chat/deploy.sh`
+- Provides Vertex AI chat, STT, and TTS endpoints
+- See `api/vertex-chat/README.md` for deployment
 
 ## 🔗 Access URLs
 
 Once DNS propagates (5-60 minutes):
-- **Main**: https://chat.tersona.terpedia.com
-- **Alias**: https://tersona.terpedia.com (redirects to chat)
+- **Main**: https://tersona.terpedia.com (GitHub Pages)
+- **Backend API**: Deploy separately to Cloud Run (see `api/vertex-chat/README.md`)
 
 ## ⚠️ Important Next Steps
 
-1. **Update DNS**: Choose Option 1 (SiteGround) or Option 2 (Route 53 migration) above
-2. **Wait for SSL**: Google-managed certificate will auto-provision after DNS resolves
-3. **Test**: Visit https://chat.tersona.terpedia.com
-4. **Create TerpeneQueen**: Set up the agent in LibreChat UI
+1. **DNS Updated**: `tersona.terpedia.com` now points to GitHub Pages
+2. **Wait for DNS propagation**: 5-60 minutes (sometimes up to 24 hours)
+3. **Wait for SSL**: GitHub Pages SSL will auto-provision after DNS resolves
+4. **Deploy Backend**: Run `api/vertex-chat/deploy.sh` to deploy the Cloud Run API
+5. **Test**: Visit https://tersona.terpedia.com and enter your Cloud Run API URL
 
 ## 📊 Current Status
 
 - ✅ Route 53 hosted zone created
-- ✅ DNS records created in Route 53
-- ✅ LibreChat running on GCP
-- ✅ All services healthy
-- ⏳ DNS propagation (waiting for your choice on Option 1 or 2)
-- ⏳ SSL certificate (after DNS)
+- ✅ DNS records updated: `tersona.terpedia.com` → GitHub Pages
+- ✅ `chat.tersona.terpedia.com` A record removed (no longer needed)
+- ✅ Frontend deployed to GitHub Pages
+- ⏳ DNS propagation (5-60 minutes)
+- ⏳ GitHub Pages SSL certificate (auto-provisions after DNS)
+- ⏳ Backend API deployment (run `api/vertex-chat/deploy.sh`)
 
 ## Management
 

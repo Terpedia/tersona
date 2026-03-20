@@ -1,35 +1,35 @@
 #!/usr/bin/env bash
-# Route 53 DNS setup for chat.tersona.terpedia.com using profile terpedia.
+# Route 53 DNS setup for tersona.terpedia.com (GitHub Pages) using profile terpedia.
 # Run: ./scripts/route53-dns-setup.sh
 # Requires: aws cli, profile terpedia configured.
 
 set -e
 PROFILE="${AWS_PROFILE:-terpedia}"
 ZONE_ID="Z1008515TFY6OXJW5Z47"
-GCP_LB_IP="34.110.252.202"
+GITHUB_PAGES_DOMAIN="Terpedia.github.io"  # Update if your GitHub Pages domain is different
 
 echo "Using AWS profile: $PROFILE"
 echo "Hosted zone: $ZONE_ID (terpedia.com)"
 echo ""
 
-# Ensure A record: chat.tersona.terpedia.com -> GCP LB
-echo "Setting A record: chat.tersona.terpedia.com -> $GCP_LB_IP"
+# Delete A record: chat.tersona.terpedia.com (no longer needed)
+echo "Deleting A record: chat.tersona.terpedia.com"
 aws route53 change-resource-record-sets --profile "$PROFILE" --hosted-zone-id "$ZONE_ID" \
   --change-batch '{
     "Changes": [{
-      "Action": "UPSERT",
+      "Action": "DELETE",
       "ResourceRecordSet": {
         "Name": "chat.tersona.terpedia.com",
         "Type": "A",
         "TTL": 300,
-        "ResourceRecords": [{"Value": "'"$GCP_LB_IP"'"}]
+        "ResourceRecords": [{"Value": "34.110.252.202"}]
       }
     }]
-  }' --output text --query "ChangeInfo.Status"
+  }' --output text --query "ChangeInfo.Status" 2>/dev/null || echo "Record not found or already deleted"
 echo ""
 
-# Ensure CNAME: tersona.terpedia.com -> chat.tersona.terpedia.com
-echo "Setting CNAME: tersona.terpedia.com -> chat.tersona.terpedia.com"
+# Ensure CNAME: tersona.terpedia.com -> GitHub Pages
+echo "Setting CNAME: tersona.terpedia.com -> $GITHUB_PAGES_DOMAIN"
 aws route53 change-resource-record-sets --profile "$PROFILE" --hosted-zone-id "$ZONE_ID" \
   --change-batch '{
     "Changes": [{
@@ -38,7 +38,7 @@ aws route53 change-resource-record-sets --profile "$PROFILE" --hosted-zone-id "$
         "Name": "tersona.terpedia.com",
         "Type": "CNAME",
         "TTL": 300,
-        "ResourceRecords": [{"Value": "chat.tersona.terpedia.com"}]
+        "ResourceRecords": [{"Value": "'"$GITHUB_PAGES_DOMAIN"'"}]
       }
     }]
   }' --output text --query "ChangeInfo.Status"
