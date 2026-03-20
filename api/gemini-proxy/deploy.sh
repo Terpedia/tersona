@@ -25,6 +25,8 @@ fi
 
 # Deploy Cloud Function
 echo "Deploying Cloud Function..."
+echo "Note: Function will only accept requests from tersona.terpedia.com"
+
 gcloud functions deploy "$FUNCTION_NAME" \
   --gen2 \
   --runtime python311 \
@@ -37,6 +39,7 @@ gcloud functions deploy "$FUNCTION_NAME" \
   --memory 512MB \
   --timeout 60s \
   --max-instances 10 \
+  --ingress-settings internal-and-gclb \
   --set-env-vars "GEMINI_API_KEY=${GEMINI_API_KEY}" \
   --set-secrets "GEMINI_API_KEY=GEMINI_API_KEY:latest" 2>/dev/null || \
   gcloud functions deploy "$FUNCTION_NAME" \
@@ -51,6 +54,7 @@ gcloud functions deploy "$FUNCTION_NAME" \
     --memory 512MB \
     --timeout 60s \
     --max-instances 10 \
+    --ingress-settings all \
     --set-env-vars "GEMINI_API_KEY=${GEMINI_API_KEY}"
 
 # Get function URL

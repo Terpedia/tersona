@@ -67,6 +67,30 @@ def detect_mentioned_terpenes(message: str, active_terpenes: List[str]) -> List[
     return list(set(mentioned))
 
 
+# Allowed origins (only our chat interface)
+ALLOWED_ORIGINS = [
+    "https://tersona.terpedia.com",
+    "https://terpedia.github.io",  # GitHub Pages fallback
+    "http://localhost:3000",  # Local development
+    "http://localhost:5173",  # Local development
+]
+
+def validate_origin(request: Request) -> bool:
+    """Validate that request comes from allowed origin"""
+    origin = request.headers.get("Origin") or request.headers.get("Referer", "")
+    
+    # Extract domain from referer if origin not present
+    if not origin.startswith("http"):
+        return False
+    
+    # Check if origin matches allowed list
+    for allowed in ALLOWED_ORIGINS:
+        if origin.startswith(allowed):
+            return True
+    
+    return False
+
+
 @functions_framework.http
 def chat(request: Request):
     """
@@ -80,14 +104,24 @@ def chat(request: Request):
     """
     # CORS headers
     if request.method == "OPTIONS":
-        return make_response("", 204, {
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "POST, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type",
-        })
+        origin = request.headers.get("Origin", "")
+        if validate_origin(request):
+            return make_response("", 204, {
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+                "Access-Control-Max-Age": "3600",
+            })
+        return make_response("", 403, {})
     
     if request.method != "POST":
         return jsonify({"error": "Method not allowed"}), 405
+    
+    # Validate origin - only allow requests from our chat interface
+    if not validate_origin(request):
+        return jsonify({"error": "Forbidden: Request not from allowed origin"}), 403, {
+            "Access-Control-Allow-Origin": "null"
+        }
     
     if not GEMINI_API_KEY:
         return jsonify({"error": "Gemini API key not configured"}), 500
@@ -178,15 +212,17 @@ def chat(request: Request):
                 "terpene_id": terpene_id
             })
         
+        origin = request.headers.get("Origin", "")
         return jsonify({
             "responses": responses,
             "conversation_history": updated_history
         }), 200, {
-            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Origin": origin if validate_origin(request) else "null",
             "Content-Type": "application/json"
         }
         
     except Exception as e:
+        origin = request.headers.get("Origin", "")
         return jsonify({"error": str(e)}), 500, {
-            "Access-Control-Allow-Origin": "*"
+            "Access-Control-Allow-Origin": origin if validate_origin(request) else "null"
         }
