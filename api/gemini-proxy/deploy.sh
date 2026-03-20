@@ -13,15 +13,8 @@ echo "Project: $PROJECT_ID"
 echo "Region: $REGION"
 echo ""
 
-# Check if API key is set
-if [ -z "$GEMINI_API_KEY" ]; then
-    echo "⚠️  Warning: GEMINI_API_KEY not set in environment"
-    echo "Set it during deployment or in Cloud Function config"
-    read -p "Enter Gemini API key (or press Enter to skip): " API_KEY
-    if [ -n "$API_KEY" ]; then
-        GEMINI_API_KEY="$API_KEY"
-    fi
-fi
+# No API key needed - uses service account authentication
+echo "✅ Using Vertex AI with service account (no API key needed)"
 
 # Deploy Cloud Function
 echo "Deploying Cloud Function..."
@@ -39,9 +32,9 @@ gcloud functions deploy "$FUNCTION_NAME" \
   --memory 512MB \
   --timeout 60s \
   --max-instances 10 \
-  --ingress-settings internal-and-gclb \
-  --set-env-vars "GEMINI_API_KEY=${GEMINI_API_KEY}" \
-  --set-secrets "GEMINI_API_KEY=GEMINI_API_KEY:latest" 2>/dev/null || \
+  --service-account "terpenequeen-api@terpedia-489015.iam.gserviceaccount.com" \
+  --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_LOCATION=$REGION" \
+  2>/dev/null || \
   gcloud functions deploy "$FUNCTION_NAME" \
     --gen2 \
     --runtime python311 \
@@ -54,8 +47,7 @@ gcloud functions deploy "$FUNCTION_NAME" \
     --memory 512MB \
     --timeout 60s \
     --max-instances 10 \
-    --ingress-settings all \
-    --set-env-vars "GEMINI_API_KEY=${GEMINI_API_KEY}"
+    --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_LOCATION=$REGION"
 
 # Get function URL
 FUNCTION_URL=$(gcloud functions describe "$FUNCTION_NAME" \

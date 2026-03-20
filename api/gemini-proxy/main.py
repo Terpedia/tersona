@@ -1,19 +1,26 @@
 """
-Cloud Function to proxy Gemini API calls
-Keeps API key secure on server side
+Cloud Function to proxy Vertex AI Gemini calls
+Uses service account authentication (no API key needed)
 """
 import functions_framework
 from flask import Request, jsonify, make_response
 import os
 import json
-import requests
 from typing import List, Dict, Optional
 
-# Gemini API endpoint
-GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent"
+# Google Cloud project and location
+GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "terpedia-489015")
+GOOGLE_LOCATION = os.getenv("GOOGLE_LOCATION", "us-central1")
 
-# Get API key from environment (set in Cloud Function config)
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+# Initialize Vertex AI (uses service account from Cloud Function)
+try:
+    from google.cloud import aiplatform
+    from vertexai.generative_models import GenerativeModel
+    aiplatform.init(project=GOOGLE_CLOUD_PROJECT, location=GOOGLE_LOCATION)
+    VERTEX_AI_AVAILABLE = True
+except Exception as e:
+    VERTEX_AI_AVAILABLE = False
+    print(f"Warning: Vertex AI not available: {e}")
 
 # Terpene system prompts (simplified - full version in terpenes.py)
 TERPENE_PROMPTS = {
@@ -180,26 +187,32 @@ def chat(request: Request):
                 "parts": [{"text": message}]
             })
             
-            # Call Gemini API
-            response = requests.post(
-                f"{GEMINI_API_URL}?key={GEMINI_API_KEY}",
-                json={
-                    "contents": contents,
-                    "generationConfig": {
-                        "temperature": 0.7,
-                        "topK": 40,
-                        "topP": 0.95,
-                        "maxOutputTokens": 1024,
-                    }
-                },
-                headers={"Content-Type": "application/json"}
+            # Call Vertex AI Gemini (uses service account auth automatically)
+            model = GenerativeModel(
+                model_name="gemini-2.0-flash-001",
+                system_instruction=system_prompt
             )
             
-            if response.status_code != 200:
-                return jsonify({"error": f"Gemini API error: {response.text}"}), 500
+            # Build conversation for Vertex AI format
+            chat = model.start_chat(history=[])
             
-            result = response.json()
-            assistant_text = result["candidates"][0]["content"]["parts"][0]["text"]
+            # Convert contents to Vertex AI format
+            vertex_messages = []
+            for msg in contents:
+                if msg["role"] == "user":
+                    vertex_messages.append(msg["parts"][0]["text"])
+                elif msg["role"] == "model":
+                    vertex_messages.append(msg["parts"][0]["text"])
+            
+            # Send message (Vertex AI handles conversation history)
+            if len(vertex_messages) > 1:
+                # Multi-turn conversation
+                response = chat.send_message(vertex_messages[-1])
+            else:
+                # First message
+                response = model.generate_content(vertex_messages[0] if vertex_messages else message)
+            
+            assistant_text = response.text
             
             responses.append({
                 "terpene_id": terpene_id,
