@@ -421,7 +421,14 @@
 
   <script type="module">
     // Single API URL for all endpoints (chat, STT, TTS)
-    let API_URL = localStorage.getItem('api_url') || '';
+    // Default to deployed Cloud Function URL
+    const DEFAULT_API_URL = 'https://gemini-proxy-nanrsdlaoa-uc.a.run.app';
+    let API_URL = localStorage.getItem('api_url') || DEFAULT_API_URL;
+    
+    // Save default URL if not already set
+    if (!localStorage.getItem('api_url')) {
+      localStorage.setItem('api_url', DEFAULT_API_URL);
+    }
     
     let conversationHistory = [];
     let currentMode = 'text';
@@ -433,17 +440,10 @@
     let terpenes = [];
 
     async function saveApiUrl() {
-      const apiUrl = document.getElementById('apiUrlInput').value.trim();
+      const apiUrl = document.getElementById('apiUrlInput').value.trim() || DEFAULT_API_URL;
       
-      if (apiUrl) {
-        localStorage.setItem('api_url', apiUrl);
-        API_URL = apiUrl;
-      }
-      
-      if (!apiUrl) {
-        alert('Please enter the API URL (Cloud Function)');
-        return;
-      }
+      localStorage.setItem('api_url', apiUrl);
+      API_URL = apiUrl;
       
       document.getElementById('apiConfig').style.display = 'none';
       document.getElementById('chatContainer').style.display = 'flex';
