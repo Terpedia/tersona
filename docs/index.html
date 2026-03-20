@@ -382,13 +382,15 @@
   </div>
 
   <div id="apiConfig" class="api-config">
-    <h3>🔗 Backend API URL</h3>
-    <p>Enter your Cloud Run API URL (or leave empty to use default)</p>
-    <input type="text" id="apiUrlInput" placeholder="https://terpenequeen-api-xxx.run.app (or leave empty)">
+    <h3>🔗 Backend API Configuration</h3>
+    <p>Enter your Cloud Function URL for chat (Gemini API proxy)</p>
+    <input type="text" id="chatApiUrlInput" placeholder="https://gemini-proxy-xxx.run.app">
+    <p style="margin-top: 1rem; margin-bottom: 0.5rem;">Optional: STT/TTS service URL (for voice features)</p>
+    <input type="text" id="sttTtsApiUrlInput" placeholder="https://stt-tts-service-xxx.run.app">
     <br>
     <button onclick="saveApiUrl()">Save & Start Chatting</button>
     <p style="font-size: 0.85rem; color: #666; margin-top: 0.5rem;">
-      Default: Uses environment variable or prompts for URL
+      No API keys needed - handled securely on the server side
     </p>
   </div>
 
@@ -420,8 +422,9 @@
   </div>
 
   <script type="module">
-    // Default API URL - update with your Cloud Run service URL after deployment
-    const API_BASE_URL = localStorage.getItem('api_url') || '';
+    // API URLs - chat (Cloud Function) and STT/TTS (Cloud Run)
+    let CHAT_API_URL = localStorage.getItem('chat_api_url') || '';
+    let STT_TTS_API_URL = localStorage.getItem('stt_tts_api_url') || '';
     
     let conversationHistory = [];
     let currentMode = 'text';
@@ -433,13 +436,26 @@
     let terpenes = [];
 
     async function saveApiUrl() {
-      const apiUrl = document.getElementById('apiUrlInput').value.trim();
-      if (apiUrl) {
-        localStorage.setItem('api_url', apiUrl);
+      const chatApiUrl = document.getElementById('chatApiUrlInput').value.trim();
+      const sttTtsApiUrl = document.getElementById('sttTtsApiUrlInput').value.trim();
+      
+      if (chatApiUrl) {
+        localStorage.setItem('chat_api_url', chatApiUrl);
+        CHAT_API_URL = chatApiUrl;
       }
+      if (sttTtsApiUrl) {
+        localStorage.setItem('stt_tts_api_url', sttTtsApiUrl);
+        STT_TTS_API_URL = sttTtsApiUrl;
+      }
+      
+      if (!chatApiUrl) {
+        alert('Please enter the Chat API URL (Cloud Function)');
+        return;
+      }
+      
       document.getElementById('apiConfig').style.display = 'none';
       document.getElementById('chatContainer').style.display = 'flex';
-      await loadTerpenes(apiUrl || API_BASE_URL);
+      await loadTerpenes();
       activeTerpenes = ['terpenequeen'];
       renderTerpeneSelector();
       updateHeader();
@@ -451,11 +467,13 @@
     }
 
     async function loadApiUrl() {
-      const apiUrl = localStorage.getItem('api_url');
-      if (apiUrl) {
+      CHAT_API_URL = localStorage.getItem('chat_api_url') || '';
+      STT_TTS_API_URL = localStorage.getItem('stt_tts_api_url') || '';
+      
+      if (CHAT_API_URL) {
         document.getElementById('apiConfig').style.display = 'none';
         document.getElementById('chatContainer').style.display = 'flex';
-        await loadTerpenes(apiUrl);
+        await loadTerpenes();
         activeTerpenes = ['terpenequeen'];
         renderTerpeneSelector();
         updateHeader();
@@ -466,36 +484,27 @@
         }
       } else {
         // Show API config if no URL is set
-        document.getElementById('apiUrlInput').placeholder = 'https://terpenequeen-api-xxx.run.app';
+        document.getElementById('chatApiUrlInput').placeholder = 'https://gemini-proxy-xxx.run.app';
+        document.getElementById('sttTtsApiUrlInput').placeholder = 'https://stt-tts-service-xxx.run.app (optional)';
       }
     }
 
-    async function loadTerpenes(apiUrl) {
-      try {
-        const response = await fetch(`${apiUrl}/api/terpenes`);
-        if (response.ok) {
-          const data = await response.json();
-          terpenes = data.terpenes;
-          renderTerpeneSelector();
-        }
-      } catch (error) {
-        console.warn('Failed to load terpenes, using defaults:', error);
-        // Fallback terpenes if API fails
-        terpenes = [
-          { id: 'terpenequeen', name: 'TerpeneQueen', emoji: '🌿' },
-          { id: 'limonene', name: 'Limonene', emoji: '🍋' },
-          { id: 'myrcene', name: 'Myrcene', emoji: '🥭' },
-          { id: 'pinene', name: 'Alpha-Pinene', emoji: '🌲' },
-          { id: 'linalool', name: 'Linalool', emoji: '💜' },
-          { id: 'caryophyllene', name: 'Beta-Caryophyllene', emoji: '🌶️' },
-          { id: 'humulene', name: 'Humulene', emoji: '🍺' },
-          { id: 'terpinolene', name: 'Terpinolene', emoji: '🌿' },
-          { id: 'ocimene', name: 'Ocimene', emoji: '🌺' },
-          { id: 'bisabolol', name: 'Bisabolol', emoji: '🌼' },
-          { id: 'geraniol', name: 'Geraniol', emoji: '🌹' },
-        ];
-        renderTerpeneSelector();
-      }
+    async function loadTerpenes() {
+      // Use hardcoded terpenes (no API call needed)
+      terpenes = [
+        { id: 'terpenequeen', name: 'TerpeneQueen', emoji: '🌿', greeting: "Hello! I'm TerpeneQueen — Susan Trapp, PhD. I'm here to explore terpenes, cannabis botany, and natural products with you. What would you like to know?" },
+        { id: 'limonene', name: 'Limonene', emoji: '🍋', greeting: "Ciao bella! I'm Limonene, fresh as a lemon grove in Sicily. Ready to brighten your day?" },
+        { id: 'myrcene', name: 'Myrcene', emoji: '🥭', greeting: "Olá, friend. I'm Myrcene, born from the Amazon mango trees. Let's slow down together..." },
+        { id: 'pinene', name: 'Alpha-Pinene', emoji: '🌲', greeting: "Hej! I'm Alpha-Pinene from the Swedish forests. Let me help clear your mind like a walk through the pines." },
+        { id: 'linalool', name: 'Linalool', emoji: '💜', greeting: "Bonjour chéri! I'm Linalool, essence of Provence lavender. Shall we find some tranquility together?" },
+        { id: 'caryophyllene', name: 'Beta-Caryophyllene', emoji: '🌶️', greeting: "Namaste! I'm Beta-Caryophyllene, essence of black pepper and cloves. Let me share ancient wisdom with you." },
+        { id: 'humulene', name: 'Humulene', emoji: '🍺', greeting: "Dobrý den! I'm Humulene from the hop fields of Bohemia. Let's get back to earth, shall we?" },
+        { id: 'terpinolene', name: 'Terpinolene', emoji: '🌿', greeting: "G'day mate! I'm Terpinolene from the Australian tea trees. Ready to explore something a bit mysterious?" },
+        { id: 'ocimene', name: 'Ocimene', emoji: '🌺', greeting: "Sawasdee ka! I'm Ocimene from Thai basil and mangoes. Let's add some tropical sweetness to your day!" },
+        { id: 'bisabolol', name: 'Bisabolol', emoji: '🌼', greeting: "Oi! I'm Bisabolol, the healing spirit of Brazilian chamomile. How can I help you heal today?" },
+        { id: 'geraniol', name: 'Geraniol', emoji: '🌹', greeting: "Marhaba! I'm Geraniol from the rose gardens of Morocco. Let me share the essence of roses with you." },
+      ];
+      renderTerpeneSelector();
     }
 
     function renderTerpeneSelector() {
@@ -614,11 +623,10 @@
       sendButton.innerHTML = '<span class="loading"></span>';
 
       try {
-        const apiUrl = localStorage.getItem('api_url');
-        if (!apiUrl) {
-          throw new Error('API URL not configured. Please enter your Cloud Run service URL.');
+        if (!CHAT_API_URL) {
+          throw new Error('Chat API URL not configured. Please enter your Cloud Function URL.');
         }
-        const response = await fetch(`${apiUrl}/api/chat`, {
+        const response = await fetch(`${CHAT_API_URL}/chat`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -662,11 +670,15 @@
         if (firstResponse && data.responses && data.responses.length === 1) {
           let audioUrl = null;
           try {
+            if (!STT_TTS_API_URL) {
+              console.warn('STT/TTS API URL not configured, skipping audio');
+              return;
+            }
             const ttsFormData = new FormData();
             ttsFormData.append('text', firstResponse.response);
             ttsFormData.append('terpene_id', firstResponse.terpene_id);
             
-            const ttsResponse = await fetch(`${apiUrl}/api/tts`, {
+            const ttsResponse = await fetch(`${STT_TTS_API_URL}/api/tts`, {
               method: 'POST',
               body: ttsFormData,
             });
@@ -750,46 +762,75 @@
 
     async function sendAudioMessage(audioBlob) {
       try {
-        const apiUrl = localStorage.getItem('api_url');
-        if (!apiUrl) {
-          throw new Error('API URL not configured. Please enter your Cloud Run service URL.');
+        if (!STT_TTS_API_URL) {
+          throw new Error('STT/TTS API URL not configured. Please enter your STT/TTS service URL for voice features.');
         }
         
-        // Use the complete audio chat endpoint
-        const formData = new FormData();
-        formData.append('audio_file', audioBlob, 'recording.webm');
-        formData.append('active_terpenes', JSON.stringify(activeTerpenes));
-        formData.append('conversation_history', JSON.stringify(conversationHistory));
-        formData.append('language', 'en-US');
+        // Step 1: STT - convert audio to text
+        const sttFormData = new FormData();
+        sttFormData.append('file', audioBlob, 'recording.webm');
+        sttFormData.append('language', 'en-US');
         
-        const response = await fetch(`${apiUrl}/api/chat-audio`, {
+        const sttResponse = await fetch(`${STT_TTS_API_URL}/api/stt`, {
           method: 'POST',
-          body: formData,
+          body: sttFormData,
         });
-
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.detail || 'Failed to process audio');
-        }
-
-        // Get transcript, response text, and terpene info from headers
-        const userTranscript = response.headers.get('X-User-Transcript') || '[Audio message]';
-        const assistantText = response.headers.get('X-Assistant-Text') || '[Audio response]';
-        const terpeneId = response.headers.get('X-Terpene-ID') || activeTerpenes[0];
-
-        // Get audio response
-        const audioBlob = await response.blob();
-        const audioUrl = URL.createObjectURL(audioBlob);
         
+        if (!sttResponse.ok) {
+          throw new Error('Speech-to-text failed');
+        }
+        
+        const sttData = await sttResponse.json();
+        const userTranscript = sttData.text;
+        
+        // Step 2: Chat with Gemini (via Cloud Function)
+        if (!CHAT_API_URL) {
+          throw new Error('Chat API URL not configured.');
+        }
+        
+        const chatResponse = await fetch(`${CHAT_API_URL}/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            message: userTranscript,
+            active_terpenes: activeTerpenes,
+            conversation_history: conversationHistory,
+          }),
+        });
+        
+        if (!chatResponse.ok) {
+          throw new Error('Chat request failed');
+        }
+        
+        const chatData = await chatResponse.json();
+        const firstResponse = chatData.responses?.[0];
+        if (!firstResponse) {
+          throw new Error('No response from chat');
+        }
+        
+        // Step 3: TTS - convert response to audio
+        const ttsFormData = new FormData();
+        ttsFormData.append('text', firstResponse.response);
+        ttsFormData.append('terpene_id', firstResponse.terpene_id);
+        
+        const ttsResponse = await fetch(`${STT_TTS_API_URL}/api/tts`, {
+          method: 'POST',
+          body: ttsFormData,
+        });
+        
+        if (!ttsResponse.ok) {
+          throw new Error('Text-to-speech failed');
+        }
+        
+        const audioBlob = await ttsResponse.blob();
+        const audioUrl = URL.createObjectURL(audioBlob);
+
         // Add messages
         addMessage('user', userTranscript);
-        addMessage('assistant', assistantText, audioUrl, terpeneId);
+        addMessage('assistant', firstResponse.response, audioUrl, firstResponse.terpene_id);
         
         // Update conversation history
-        conversationHistory.push(
-          { role: 'user', content: userTranscript },
-          { role: 'assistant', content: assistantText, terpene_id: terpeneId }
-        );
+        conversationHistory = chatData.conversation_history;
         
         document.getElementById('recordingStatus').textContent = 'Click to start recording';
       } catch (error) {
