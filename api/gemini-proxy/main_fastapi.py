@@ -1,45 +1,36 @@
 """
-Cloud Function for Terpene Chat - Vertex AI + STT/TTS
+Cloud Run service for Terpene Chat - Vertex AI + STT/TTS
 Uses service account authentication (no API key needed)
 """
-import functions_framework
-from flask import Request, jsonify, make_response, request as flask_request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response, JSONResponse
+from pydantic import BaseModel
+from typing import List, Dict, Optional
 import os
 import json
-from typing import List, Dict, Optional
-import base64
 
 # Google Cloud project and location
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "terpedia-489015")
 GOOGLE_LOCATION = os.getenv("GOOGLE_LOCATION", "us-central1")
 
-# Initialize Vertex AI (uses service account from Cloud Function)
-try:
-    from google.cloud import aiplatform
-    from google.cloud import speech_v1, texttospeech_v1
-    aiplatform.init(project=GOOGLE_CLOUD_PROJECT, location=GOOGLE_LOCATION)
-    VERTEX_AI_AVAILABLE = True
-    SPEECH_AVAILABLE = True
-except Exception as e:
-    VERTEX_AI_AVAILABLE = False
-    SPEECH_AVAILABLE = False
-    print(f"Warning: Google Cloud services not available: {e}")
+# Lazy initialization flags
+VERTEX_AI_INITIALIZED = False
+VERTEX_AI_AVAILABLE = True
+SPEECH_AVAILABLE = True
 
-# Import GenerativeModel when needed (lazy import)
-def get_generative_model():
-    try:
-        # Ensure vertexai is available
-        import vertexai
-        # Import GenerativeModel
-        from vertexai.generative_models import GenerativeModel
-        return GenerativeModel
-    except ImportError as e:
-        # Try alternative import
+def init_vertex_ai():
+    """Lazy initialization of Vertex AI"""
+    global VERTEX_AI_INITIALIZED, VERTEX_AI_AVAILABLE
+    if not VERTEX_AI_INITIALIZED:
         try:
-            from vertexai.preview.generative_models import GenerativeModel
-            return GenerativeModel
-        except ImportError:
-            raise ImportError(f"Failed to import GenerativeModel: {e}. Make sure google-cloud-aiplatform is installed.")
+            from google.cloud import aiplatform
+            aiplatform.init(project=GOOGLE_CLOUD_PROJECT, location=GOOGLE_LOCATION)
+            VERTEX_AI_INITIALIZED = True
+            VERTEX_AI_AVAILABLE = True
+        except Exception as e:
+            VERTEX_AI_AVAILABLE = False
+            print(f"Warning: Vertex AI initialization failed: {e}")
 
 # Initialize Speech clients lazily
 speech_client = None
@@ -48,13 +39,23 @@ tts_client = None
 def get_speech_client():
     global speech_client
     if speech_client is None and SPEECH_AVAILABLE:
-        speech_client = speech_v1.SpeechClient()
+        try:
+            from google.cloud import speech_v1
+            speech_client = speech_v1.SpeechClient()
+        except Exception as e:
+            print(f"Warning: Speech client initialization failed: {e}")
+            return None
     return speech_client
 
 def get_tts_client():
     global tts_client
     if tts_client is None and SPEECH_AVAILABLE:
-        tts_client = texttospeech_v1.TextToSpeechClient()
+        try:
+            from google.cloud import texttospeech_v1
+            tts_client = texttospeech_v1.TextToSpeechClient()
+        except Exception as e:
+            print(f"Warning: TTS client initialization failed: {e}")
+            return None
     return tts_client
 
 # Terpene system prompts (simplified - full version in terpenes.py)
@@ -72,6 +73,21 @@ TERPENE_PROMPTS = {
     "geraniol": """You are Geraniol, a terpene molecule. Romantic and floral like Moroccan rose valleys. Elegant, protective, and sweet.""",
 }
 
+app = FastAPI(title="Terpene Chat API")
+
+# CORS - allow GitHub Pages domain
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://tersona.terpedia.com",
+        "https://terpedia.github.io",
+        "http://localhost:3000",
+        "http://localhost:5173",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def detect_mentioned_terpenes(message: str, active_terpenes: List[str]) -> List[str]:
     """Detect which terpenes are mentioned in the message"""
@@ -109,51 +125,25 @@ def detect_mentioned_terpenes(message: str, active_terpenes: List[str]) -> List[
     return list(set(mentioned))
 
 
-# Allowed origins (only our chat interface)
-ALLOWED_ORIGINS = [
-    "https://tersona.terpedia.com",
-    "https://terpedia.github.io",  # GitHub Pages fallback
-    "http://localhost:3000",  # Local development
-    "http://localhost:5173",  # Local development
-]
+# Request/Response models
+class ChatRequest(BaseModel):
+    message: str
+    active_terpenes: Optional[List[str]] = ["terpenequeen"]
+    conversation_history: Optional[List[Dict[str, str]]] = []
 
-def validate_origin(request: Request) -> bool:
-    """Validate that request comes from allowed origin"""
-    origin = request.headers.get("Origin") or request.headers.get("Referer", "")
-    
-    # Extract domain from referer if origin not present
-    if not origin.startswith("http"):
-        return False
-    
-    # Check if origin matches allowed list
-    for allowed in ALLOWED_ORIGINS:
-        if origin.startswith(allowed):
-            return True
-    
-    return False
+class ChatResponse(BaseModel):
+    responses: List[Dict[str, str]]
+    conversation_history: List[Dict[str, str]]
 
 
-@functions_framework.http
-def terpene_api(request: Request):
-    """
-    Main entry point - routes to chat, stt, or tts based on path
-    """
-    # Get path from request (Cloud Functions Gen2 path format)
-    path = request.path.strip('/')
-    
-    # Route based on path
-    if '/stt' in path or path.endswith('stt'):
-        return stt(request)
-    elif '/tts' in path or path.endswith('tts'):
-        return tts(request)
-    elif '/health' in path or path.endswith('health'):
-        return jsonify({"status": "ok", "service": "terpene-api"}), 200
-    else:
-        # Default to chat (handles /chat, /, and root)
-        return chat(request)
+@app.get("/health")
+async def health():
+    """Health check"""
+    return {"status": "ok", "service": "terpene-api"}
 
 
-def chat(request: Request):
+@app.post("/chat")
+async def chat(request: ChatRequest):
     """
     Proxy Gemini API calls
     POST /chat
@@ -163,33 +153,16 @@ def chat(request: Request):
         "conversation_history": List[Dict]
     }
     """
-    # CORS headers
-    if request.method == "OPTIONS":
-        origin = request.headers.get("Origin", "")
-        if validate_origin(request):
-            return make_response("", 204, {
-                "Access-Control-Allow-Origin": origin,
-                "Access-Control-Allow-Methods": "POST, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type",
-                "Access-Control-Max-Age": "3600",
-            })
-        return make_response("", 403, {})
-    
-    if request.method != "POST":
-        return jsonify({"error": "Method not allowed"}), 405
-    
-    # Validate origin - only allow requests from our chat interface
-    if not validate_origin(request):
-        return jsonify({"error": "Forbidden: Request not from allowed origin"}), 403, {
-            "Access-Control-Allow-Origin": "null"
-        }
-    
+    # Initialize Vertex AI if needed
+    init_vertex_ai()
+    if not VERTEX_AI_AVAILABLE:
+        raise HTTPException(status_code=500, detail="Vertex AI not available")
     
     try:
-        data = request.get_json()
-        message = data.get("message", "")
-        active_terpenes = data.get("active_terpenes", ["terpenequeen"])
-        conversation_history = data.get("conversation_history", [])
+        from vertexai.generative_models import GenerativeModel
+        message = request.message
+        active_terpenes = request.active_terpenes or ["terpenequeen"]
+        conversation_history = request.conversation_history or []
         
         # Determine which terpenes should respond
         responding_terpenes = detect_mentioned_terpenes(message, active_terpenes)
@@ -207,40 +180,7 @@ def chat(request: Request):
                 other_names = [t for t in active_terpenes if t != terpene_id]
                 system_prompt += f"\n\nCONTEXT: You are in a panel discussion with: {', '.join(other_names)}. Respond when directly addressed. Keep responses concise."
             
-            # Build conversation for Gemini
-            contents = []
-            
-            # Add system instruction as first user message (Gemini format)
-            contents.append({
-                "role": "user",
-                "parts": [{"text": f"System: {system_prompt}"}]
-            })
-            contents.append({
-                "role": "model",
-                "parts": [{"text": "Understood. I'll stay in character."}]
-            })
-            
-            # Add conversation history
-            for msg in conversation_history:
-                if msg.get("role") == "user":
-                    contents.append({
-                        "role": "user",
-                        "parts": [{"text": msg["content"]}]
-                    })
-                elif msg.get("role") == "assistant":
-                    contents.append({
-                        "role": "model",
-                        "parts": [{"text": msg["content"]}]
-                    })
-            
-            # Add current message
-            contents.append({
-                "role": "user",
-                "parts": [{"text": message}]
-            })
-            
             # Initialize Vertex AI model with system prompt
-            GenerativeModel = get_generative_model()
             model = GenerativeModel(
                 model_name="gemini-2.0-flash-001",
                 system_instruction=system_prompt
@@ -275,59 +215,34 @@ def chat(request: Request):
                 "terpene_id": terpene_id
             })
         
-        origin = request.headers.get("Origin", "")
-        return jsonify({
-            "responses": responses,
-            "conversation_history": updated_history
-        }), 200, {
-            "Access-Control-Allow-Origin": origin if validate_origin(request) else "null",
-            "Content-Type": "application/json"
-        }
+        return ChatResponse(
+            responses=responses,
+            conversation_history=updated_history
+        )
         
     except Exception as e:
-        origin = request.headers.get("Origin", "")
-        return jsonify({"error": str(e)}), 500, {
-            "Access-Control-Allow-Origin": origin if validate_origin(request) else "null"
-        }
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-def stt(request: Request):
+@app.post("/stt")
+async def speech_to_text(
+    file: UploadFile = File(...),
+    language: Optional[str] = Form("en-US"),
+):
     """
     Speech-to-Text endpoint
     POST /stt
     Body: multipart/form-data with audio file
     """
-    # CORS
-    if request.method == "OPTIONS":
-        origin = request.headers.get("Origin", "")
-        if validate_origin(request):
-            return make_response("", 204, {
-                "Access-Control-Allow-Origin": origin,
-                "Access-Control-Allow-Methods": "POST, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type",
-            })
-        return make_response("", 403, {})
-    
-    if request.method != "POST":
-        return jsonify({"error": "Method not allowed"}), 405
-    
-    if not validate_origin(request):
-        return jsonify({"error": "Forbidden: Request not from allowed origin"}), 403
-    
     if not SPEECH_AVAILABLE:
-        return jsonify({"error": "Speech-to-Text not available"}), 500
+        raise HTTPException(status_code=500, detail="Speech-to-Text not available")
     
     try:
-        # Get audio file from form data
-        if 'file' not in flask_request.files:
-            return jsonify({"error": "No audio file provided"}), 400
-        
-        audio_file = flask_request.files['file']
-        audio_content = audio_file.read()
-        language = flask_request.form.get('language', 'en-US')
+        # Read audio file
+        audio_content = await file.read()
         
         # Detect encoding from file extension
-        file_ext = audio_file.filename.split(".")[-1].lower() if audio_file.filename else "webm"
+        file_ext = file.filename.split(".")[-1].lower() if file.filename else "webm"
         encoding_map = {
             "webm": speech_v1.RecognitionConfig.AudioEncoding.WEBM_OPUS,
             "mp3": speech_v1.RecognitionConfig.AudioEncoding.MP3,
@@ -356,55 +271,32 @@ def stt(request: Request):
         if response.results:
             transcript = response.results[0].alternatives[0].transcript
         
-        origin = request.headers.get("Origin", "")
-        return jsonify({"text": transcript, "language": language}), 200, {
-            "Access-Control-Allow-Origin": origin if validate_origin(request) else "null"
-        }
+        return {"text": transcript, "language": language}
         
     except Exception as e:
-        origin = request.headers.get("Origin", "")
-        return jsonify({"error": str(e)}), 500, {
-            "Access-Control-Allow-Origin": origin if validate_origin(request) else "null"
-        }
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-def tts(request: Request):
+@app.post("/tts")
+async def text_to_speech(
+    text: str = Form(...),
+    terpene_id: str = Form("terpenequeen"),
+    speed: float = Form(1.0),
+):
     """
     Text-to-Speech endpoint
     POST /tts
     Body: form-data with text, terpene_id, speed
     Returns: MP3 audio
     """
-    # CORS
-    if request.method == "OPTIONS":
-        origin = request.headers.get("Origin", "")
-        if validate_origin(request):
-            return make_response("", 204, {
-                "Access-Control-Allow-Origin": origin,
-                "Access-Control-Allow-Methods": "POST, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type",
-            })
-        return make_response("", 403, {})
-    
-    if request.method != "POST":
-        return make_response("Method not allowed", 405)
-    
-    if not validate_origin(request):
-        return make_response("Forbidden", 403)
-    
     if not SPEECH_AVAILABLE:
-        return make_response("Text-to-Speech not available", 500)
+        raise HTTPException(status_code=500, detail="Text-to-Speech not available")
     
     try:
         from terpenes import get_terpene
         
-        # Get form data
-        text = flask_request.form.get('text', '')
-        terpene_id = flask_request.form.get('terpene_id', 'terpenequeen')
-        speed = float(flask_request.form.get('speed', 1.0))
-        
         if not text:
-            return make_response("No text provided", 400)
+            raise HTTPException(status_code=400, detail="No text provided")
         
         # Get terpene persona for voice
         terpene = get_terpene(terpene_id)
@@ -433,18 +325,10 @@ def tts(request: Request):
             audio_config=audio_config,
         )
         
-        origin = request.headers.get("Origin", "")
-        return make_response(
-            response.audio_content,
-            200,
-            {
-                "Content-Type": "audio/mpeg",
-                "Access-Control-Allow-Origin": origin if validate_origin(request) else "null"
-            }
+        return Response(
+            content=response.audio_content,
+            media_type="audio/mpeg"
         )
         
     except Exception as e:
-        origin = request.headers.get("Origin", "")
-        return jsonify({"error": str(e)}), 500, {
-            "Access-Control-Allow-Origin": origin if validate_origin(request) else "null"
-        }
+        raise HTTPException(status_code=500, detail=str(e))

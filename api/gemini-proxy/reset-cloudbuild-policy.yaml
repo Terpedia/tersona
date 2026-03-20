@@ -1,0 +1,5 @@
+# Policy to allow Cloud Build to use default worker pools
+# This removes restrictions on Cloud Build worker pools
+constraint: constraints/cloudbuild.allowedWorkerPools
+listPolicy:
+  allValues: ALLOW
