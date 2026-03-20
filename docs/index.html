@@ -297,25 +297,6 @@
       border: 1px solid #fcc;
     }
 
-    .api-config {
-      padding: 1.5rem;
-      background: #fff3cd;
-      border: 1px solid #ffc107;
-      border-radius: 8px;
-      margin: 1rem;
-      text-align: center;
-    }
-
-    .api-config input {
-      padding: 0.75rem;
-      border: 1px solid #ddd;
-      border-radius: 6px;
-      width: 100%;
-      max-width: 500px;
-      margin: 0.5rem 0;
-      font-family: monospace;
-      font-size: 0.9rem;
-    }
 
     .terpene-selector {
       margin-top: 1rem;
@@ -345,16 +326,6 @@
       border-color: #667eea;
     }
 
-    .api-config button {
-      padding: 0.75rem 1.5rem;
-      background: #667eea;
-      color: white;
-      border: none;
-      border-radius: 6px;
-      cursor: pointer;
-      font-weight: 600;
-      margin-top: 0.5rem;
-    }
 
     @media (max-width: 768px) {
       .chat-container {
@@ -381,18 +352,7 @@
     </div>
   </div>
 
-  <div id="apiConfig" class="api-config">
-    <h3>🔗 Backend API Configuration</h3>
-    <p>Enter your Cloud Function URL (handles chat, STT, and TTS)</p>
-    <input type="text" id="apiUrlInput" placeholder="https://gemini-proxy-nanrsdlaoa-uc.a.run.app" value="https://gemini-proxy-nanrsdlaoa-uc.a.run.app">
-    <br>
-    <button onclick="saveApiUrl()">Save & Start Chatting</button>
-    <p style="font-size: 0.85rem; color: #666; margin-top: 0.5rem;">
-      No API keys needed - uses service account authentication
-    </p>
-  </div>
-
-  <div class="chat-container" id="chatContainer" style="display: none;">
+  <div class="chat-container" id="chatContainer" style="display: flex;">
     <div class="messages" id="messages"></div>
     <div class="input-area">
       <div class="input-mode-toggle">
@@ -438,14 +398,10 @@
     let activeTerpenes = ['terpenequeen']; // Multiple terpenes can be active
     let terpenes = [];
 
-    async function saveApiUrl() {
-      const apiUrl = document.getElementById('apiUrlInput').value.trim() || DEFAULT_API_URL;
+    async function loadApiUrl() {
+      API_URL = localStorage.getItem('api_url') || DEFAULT_API_URL;
       
-      localStorage.setItem('api_url', apiUrl);
-      API_URL = apiUrl;
-      
-      document.getElementById('apiConfig').style.display = 'none';
-      document.getElementById('chatContainer').style.display = 'flex';
+      // Show chat interface directly (API URL is set by default)
       await loadTerpenes();
       activeTerpenes = ['terpenequeen'];
       renderTerpeneSelector();
@@ -455,24 +411,6 @@
       if (firstTerpene?.greeting) {
         addMessage('assistant', firstTerpene.greeting, null, 'terpenequeen');
       }
-    }
-
-    async function loadApiUrl() {
-      API_URL = localStorage.getItem('api_url') || DEFAULT_API_URL;
-      
-      // Always hide config and show chat (API URL is set by default)
-      if (true) {
-        document.getElementById('apiConfig').style.display = 'none';
-        document.getElementById('chatContainer').style.display = 'flex';
-        await loadTerpenes();
-        activeTerpenes = ['terpenequeen'];
-        renderTerpeneSelector();
-        updateHeader();
-        // Show greeting from first terpene
-        const firstTerpene = terpenes.find(t => t.id === 'terpenequeen');
-        if (firstTerpene?.greeting) {
-          addMessage('assistant', firstTerpene.greeting, null, 'terpenequeen');
-        }
     }
 
     async function loadTerpenes() {
