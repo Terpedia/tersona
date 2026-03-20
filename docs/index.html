@@ -412,8 +412,8 @@
     <div class="messages" id="messages"></div>
     <div class="input-area">
       <div class="input-mode-toggle">
-        <button class="mode-button active" id="textModeBtn" onclick="setMode('text')">✍️ Text</button>
-        <button class="mode-button" id="audioModeBtn" onclick="setMode('audio')">🎤 Voice</button>
+        <button class="mode-button active" id="textModeBtn">✍️ Text</button>
+        <button class="mode-button" id="audioModeBtn">🎤 Voice</button>
       </div>
 
       <div id="textInputWrapper" class="input-wrapper">
@@ -843,6 +843,17 @@
       const sendButton = document.getElementById('sendButton');
       if (sendButton) {
         sendButton.addEventListener('click', sendMessage);
+      }
+      
+      // Mode toggle buttons
+      const textModeBtn = document.getElementById('textModeBtn');
+      if (textModeBtn) {
+        textModeBtn.addEventListener('click', () => setMode('text'));
+      }
+      
+      const audioModeBtn = document.getElementById('audioModeBtn');
+      if (audioModeBtn) {
+        audioModeBtn.addEventListener('click', () => setMode('audio'));
       }
     });
 
