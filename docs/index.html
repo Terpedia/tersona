@@ -406,10 +406,9 @@
             id="messageInput"
             placeholder="Ask about terpenes, cannabis, or natural products..."
             rows="1"
-            onkeydown="handleKeyDown(event)"
           ></textarea>
         </div>
-        <button id="sendButton" onclick="sendMessage()">Send</button>
+        <button id="sendButton">Send</button>
       </div>
 
       <div id="audioInputWrapper" class="audio-input-wrapper" style="display: none;">
@@ -826,10 +825,25 @@
       }
     }
 
-    // Auto-resize textarea
-    document.getElementById('messageInput').addEventListener('input', function() {
-      this.style.height = 'auto';
-      this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+    // Set up event listeners after DOM is ready
+    document.addEventListener('DOMContentLoaded', function() {
+      // Auto-resize textarea
+      const messageInput = document.getElementById('messageInput');
+      if (messageInput) {
+        messageInput.addEventListener('input', function() {
+          this.style.height = 'auto';
+          this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+        });
+        
+        // Handle Enter key
+        messageInput.addEventListener('keydown', handleKeyDown);
+      }
+      
+      // Send button click
+      const sendButton = document.getElementById('sendButton');
+      if (sendButton) {
+        sendButton.addEventListener('click', sendMessage);
+      }
     });
 
     // Load API URL on page load
