@@ -130,8 +130,6 @@ def chat(request: Request):
             "Access-Control-Allow-Origin": "null"
         }
     
-    if not GEMINI_API_KEY:
-        return jsonify({"error": "Gemini API key not configured"}), 500
     
     try:
         data = request.get_json()
@@ -187,30 +185,27 @@ def chat(request: Request):
                 "parts": [{"text": message}]
             })
             
-            # Call Vertex AI Gemini (uses service account auth automatically)
+            # Initialize Vertex AI model with system prompt
             model = GenerativeModel(
                 model_name="gemini-2.0-flash-001",
                 system_instruction=system_prompt
             )
             
-            # Build conversation for Vertex AI format
-            chat = model.start_chat(history=[])
+            # Build conversation history for Vertex AI
+            history = []
+            for msg in conversation_history:
+                if msg.get("role") == "user":
+                    history.append({"role": "user", "parts": [{"text": msg["content"]}]})
+                elif msg.get("role") == "assistant":
+                    history.append({"role": "model", "parts": [{"text": msg["content"]}]})
             
-            # Convert contents to Vertex AI format
-            vertex_messages = []
-            for msg in contents:
-                if msg["role"] == "user":
-                    vertex_messages.append(msg["parts"][0]["text"])
-                elif msg["role"] == "model":
-                    vertex_messages.append(msg["parts"][0]["text"])
-            
-            # Send message (Vertex AI handles conversation history)
-            if len(vertex_messages) > 1:
-                # Multi-turn conversation
-                response = chat.send_message(vertex_messages[-1])
+            # Start chat with history
+            if history:
+                chat = model.start_chat(history=history)
+                response = chat.send_message(message)
             else:
-                # First message
-                response = model.generate_content(vertex_messages[0] if vertex_messages else message)
+                # First message, no history
+                response = model.generate_content(message)
             
             assistant_text = response.text
             
