@@ -1,0 +1,819 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TerpeneQueen — Susan Trapp, PhD | Tersona</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .header {
+      background: rgba(255, 255, 255, 0.95);
+      padding: 1.5rem 2rem;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+      text-align: center;
+    }
+
+    .header h1 {
+      color: #333;
+      font-size: 1.75rem;
+      font-weight: 600;
+    }
+
+    .header p {
+      color: #666;
+      margin-top: 0.5rem;
+      font-size: 0.95rem;
+    }
+
+    .chat-container {
+      flex: 1;
+      max-width: 900px;
+      width: 100%;
+      margin: 2rem auto;
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 2rem;
+      display: flex;
+      flex-direction: column;
+      gap: 1.5rem;
+    }
+
+    .message {
+      display: flex;
+      gap: 1rem;
+      animation: fadeIn 0.3s ease-in;
+    }
+
+    @keyframes fadeIn {
+      from {
+        opacity: 0;
+        transform: translateY(10px);
+      }
+      to {
+        opacity: 1;
+        transform: translateY(0);
+      }
+    }
+
+    .message.user {
+      flex-direction: row-reverse;
+    }
+
+    .message-avatar {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+      flex-shrink: 0;
+    }
+
+    .message.user .message-avatar {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+    }
+
+    .message.assistant .message-avatar {
+      background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+      color: white;
+    }
+
+    .message-content {
+      flex: 1;
+      padding: 1rem 1.25rem;
+      border-radius: 12px;
+      line-height: 1.6;
+      max-width: 75%;
+    }
+
+    .message.user .message-content {
+      background: #667eea;
+      color: white;
+      border-bottom-right-radius: 4px;
+    }
+
+    .message.assistant .message-content {
+      background: #f5f5f5;
+      color: #333;
+      border-bottom-left-radius: 4px;
+    }
+
+    .audio-controls {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+      align-items: center;
+    }
+
+    .audio-button {
+      background: rgba(0, 0, 0, 0.1);
+      border: none;
+      border-radius: 6px;
+      padding: 0.5rem;
+      cursor: pointer;
+      font-size: 1.2rem;
+      transition: background 0.2s;
+    }
+
+    .audio-button:hover {
+      background: rgba(0, 0, 0, 0.2);
+    }
+
+    .input-area {
+      padding: 1.5rem;
+      background: #f9f9f9;
+      border-top: 1px solid #e0e0e0;
+    }
+
+    .input-mode-toggle {
+      display: flex;
+      gap: 0.5rem;
+      margin-bottom: 1rem;
+      justify-content: center;
+    }
+
+    .mode-button {
+      padding: 0.5rem 1rem;
+      border: 2px solid #e0e0e0;
+      background: white;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: all 0.2s;
+    }
+
+    .mode-button.active {
+      background: #667eea;
+      color: white;
+      border-color: #667eea;
+    }
+
+    .input-wrapper {
+      display: flex;
+      gap: 1rem;
+      align-items: flex-end;
+    }
+
+    .text-input-wrapper {
+      flex: 1;
+      position: relative;
+    }
+
+    #messageInput {
+      width: 100%;
+      padding: 1rem 1.25rem;
+      border: 2px solid #e0e0e0;
+      border-radius: 12px;
+      font-size: 1rem;
+      font-family: inherit;
+      resize: none;
+      min-height: 60px;
+      max-height: 150px;
+      transition: border-color 0.2s;
+    }
+
+    #messageInput:focus {
+      outline: none;
+      border-color: #667eea;
+    }
+
+    .audio-input-wrapper {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 1rem;
+    }
+
+    .record-button {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      border: none;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      font-size: 2rem;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    }
+
+    .record-button:hover:not(:disabled) {
+      transform: scale(1.05);
+      box-shadow: 0 6px 16px rgba(102, 126, 234, 0.5);
+    }
+
+    .record-button.recording {
+      background: #f5576c;
+      animation: pulse 1.5s ease-in-out infinite;
+    }
+
+    @keyframes pulse {
+      0%, 100% {
+        transform: scale(1);
+      }
+      50% {
+        transform: scale(1.1);
+      }
+    }
+
+    .record-button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .recording-status {
+      color: #666;
+      font-size: 0.9rem;
+    }
+
+    #sendButton {
+      padding: 1rem 2rem;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      border-radius: 12px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.2s, box-shadow 0.2s;
+      align-self: flex-end;
+    }
+
+    #sendButton:hover:not(:disabled) {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    }
+
+    #sendButton:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .loading {
+      display: inline-block;
+      width: 20px;
+      height: 20px;
+      border: 3px solid rgba(102, 126, 234, 0.3);
+      border-radius: 50%;
+      border-top-color: #667eea;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .error {
+      background: #fee;
+      color: #c33;
+      padding: 1rem;
+      border-radius: 8px;
+      margin: 1rem;
+      border: 1px solid #fcc;
+    }
+
+    .api-config {
+      padding: 1.5rem;
+      background: #fff3cd;
+      border: 1px solid #ffc107;
+      border-radius: 8px;
+      margin: 1rem;
+      text-align: center;
+    }
+
+    .api-config input {
+      padding: 0.75rem;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      width: 100%;
+      max-width: 500px;
+      margin: 0.5rem 0;
+      font-family: monospace;
+      font-size: 0.9rem;
+    }
+
+    .terpene-selector {
+      margin-top: 1rem;
+    }
+
+    .terpene-button {
+      padding: 0.5rem 1rem;
+      border: 2px solid #e0e0e0;
+      background: white;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.9rem;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .terpene-button:hover {
+      border-color: #667eea;
+      transform: translateY(-2px);
+    }
+
+    .terpene-button.active {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border-color: #667eea;
+    }
+
+    .api-config button {
+      padding: 0.75rem 1.5rem;
+      background: #667eea;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 600;
+      margin-top: 0.5rem;
+    }
+
+    @media (max-width: 768px) {
+      .chat-container {
+        margin: 1rem;
+        border-radius: 12px;
+      }
+
+      .messages {
+        padding: 1.5rem;
+      }
+
+      .message-content {
+        max-width: 85%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1 id="headerTitle">🌿 TerpeneQueen — Susan Trapp, PhD</h1>
+    <p>Chat with terpenes! Each has a distinct personality and voice. Select multiple terpenes for a panel discussion. Terpenes respond when you mention them by name.</p>
+    <div class="terpene-selector" id="terpeneSelector" style="margin-top: 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center;">
+      <!-- Terpenes will be loaded here -->
+    </div>
+  </div>
+
+  <div id="apiConfig" class="api-config">
+    <h3>🔗 Backend API URL</h3>
+    <p>Enter your Cloud Run API URL (or leave empty to use default)</p>
+    <input type="text" id="apiUrlInput" placeholder="https://terpenequeen-api-xxx.run.app (or leave empty)">
+    <br>
+    <button onclick="saveApiUrl()">Save & Start Chatting</button>
+    <p style="font-size: 0.85rem; color: #666; margin-top: 0.5rem;">
+      Default: Uses environment variable or prompts for URL
+    </p>
+  </div>
+
+  <div class="chat-container" id="chatContainer" style="display: none;">
+    <div class="messages" id="messages"></div>
+    <div class="input-area">
+      <div class="input-mode-toggle">
+        <button class="mode-button active" id="textModeBtn" onclick="setMode('text')">✍️ Text</button>
+        <button class="mode-button" id="audioModeBtn" onclick="setMode('audio')">🎤 Voice</button>
+      </div>
+
+      <div id="textInputWrapper" class="input-wrapper">
+        <div class="text-input-wrapper">
+          <textarea
+            id="messageInput"
+            placeholder="Ask about terpenes, cannabis, or natural products..."
+            rows="1"
+            onkeydown="handleKeyDown(event)"
+          ></textarea>
+        </div>
+        <button id="sendButton" onclick="sendMessage()">Send</button>
+      </div>
+
+      <div id="audioInputWrapper" class="audio-input-wrapper" style="display: none;">
+        <button id="recordButton" class="record-button" onclick="toggleRecording()">🎤</button>
+        <div class="recording-status" id="recordingStatus">Click to start recording</div>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    // Default API URL - update with your Cloud Run service URL after deployment
+    const API_BASE_URL = localStorage.getItem('api_url') || '';
+    
+    let conversationHistory = [];
+    let currentMode = 'text';
+    let mediaRecorder = null;
+    let audioChunks = [];
+    let isRecording = false;
+    let currentAudio = null;
+    let activeTerpenes = ['terpenequeen']; // Multiple terpenes can be active
+    let terpenes = [];
+
+    async function saveApiUrl() {
+      const apiUrl = document.getElementById('apiUrlInput').value.trim();
+      if (apiUrl) {
+        localStorage.setItem('api_url', apiUrl);
+      }
+      document.getElementById('apiConfig').style.display = 'none';
+      document.getElementById('chatContainer').style.display = 'flex';
+      await loadTerpenes(apiUrl || API_BASE_URL);
+      activeTerpenes = ['terpenequeen'];
+      renderTerpeneSelector();
+      updateHeader();
+      // Show greeting from first terpene
+      const firstTerpene = terpenes.find(t => t.id === 'terpenequeen');
+      if (firstTerpene?.greeting) {
+        addMessage('assistant', firstTerpene.greeting, null, 'terpenequeen');
+      }
+    }
+
+    async function loadApiUrl() {
+      const apiUrl = localStorage.getItem('api_url');
+      if (apiUrl) {
+        document.getElementById('apiConfig').style.display = 'none';
+        document.getElementById('chatContainer').style.display = 'flex';
+        await loadTerpenes(apiUrl);
+        activeTerpenes = ['terpenequeen'];
+        renderTerpeneSelector();
+        updateHeader();
+        // Show greeting from first terpene
+        const firstTerpene = terpenes.find(t => t.id === 'terpenequeen');
+        if (firstTerpene?.greeting) {
+          addMessage('assistant', firstTerpene.greeting, null, 'terpenequeen');
+        }
+      } else {
+        // Show API config if no URL is set
+        document.getElementById('apiUrlInput').placeholder = 'https://terpenequeen-api-xxx.run.app';
+      }
+    }
+
+    async function loadTerpenes(apiUrl) {
+      try {
+        const response = await fetch(`${apiUrl}/api/terpenes`);
+        if (response.ok) {
+          const data = await response.json();
+          terpenes = data.terpenes;
+          renderTerpeneSelector();
+        }
+      } catch (error) {
+        console.warn('Failed to load terpenes, using defaults:', error);
+        // Fallback terpenes if API fails
+        terpenes = [
+          { id: 'terpenequeen', name: 'TerpeneQueen', emoji: '🌿' },
+          { id: 'limonene', name: 'Limonene', emoji: '🍋' },
+          { id: 'myrcene', name: 'Myrcene', emoji: '🥭' },
+          { id: 'pinene', name: 'Alpha-Pinene', emoji: '🌲' },
+          { id: 'linalool', name: 'Linalool', emoji: '💜' },
+          { id: 'caryophyllene', name: 'Beta-Caryophyllene', emoji: '🌶️' },
+          { id: 'humulene', name: 'Humulene', emoji: '🍺' },
+          { id: 'terpinolene', name: 'Terpinolene', emoji: '🌿' },
+          { id: 'ocimene', name: 'Ocimene', emoji: '🌺' },
+          { id: 'bisabolol', name: 'Bisabolol', emoji: '🌼' },
+          { id: 'geraniol', name: 'Geraniol', emoji: '🌹' },
+        ];
+        renderTerpeneSelector();
+      }
+    }
+
+    function renderTerpeneSelector() {
+      const selector = document.getElementById('terpeneSelector');
+      selector.innerHTML = '';
+      terpenes.forEach(terpene => {
+        const button = document.createElement('button');
+        button.className = 'terpene-button';
+        button.innerHTML = `${terpene.emoji} ${terpene.name}`;
+        button.onclick = () => toggleTerpene(terpene.id);
+        if (activeTerpenes.includes(terpene.id)) {
+          button.classList.add('active');
+        }
+        selector.appendChild(button);
+      });
+    }
+
+    function toggleTerpene(terpeneId) {
+      const index = activeTerpenes.indexOf(terpeneId);
+      if (index > -1) {
+        // Remove if already active (but keep at least one)
+        if (activeTerpenes.length > 1) {
+          activeTerpenes.splice(index, 1);
+        }
+      } else {
+        // Add if not active
+        activeTerpenes.push(terpeneId);
+      }
+      renderTerpeneSelector();
+      updateHeader();
+    }
+
+    function updateHeader() {
+      const headerTitle = document.getElementById('headerTitle');
+      if (activeTerpenes.length === 1) {
+        const terpene = terpenes.find(t => t.id === activeTerpenes[0]);
+        if (terpene) {
+          headerTitle.textContent = `${terpene.emoji} ${terpene.name}`;
+        }
+      } else {
+        const terpeneNames = activeTerpenes.map(id => {
+          const t = terpenes.find(terp => terp.id === id);
+          return t ? `${t.emoji} ${t.name}` : id;
+        }).join(', ');
+        headerTitle.textContent = `Panel: ${terpeneNames}`;
+      }
+      
+      // Update placeholder
+      const messageInput = document.getElementById('messageInput');
+      if (messageInput) {
+        if (activeTerpenes.length === 1) {
+          const terpene = terpenes.find(t => t.id === activeTerpenes[0]);
+          messageInput.placeholder = `Ask ${terpene?.name || 'the terpene'} about terpenes, cannabis, or natural products...`;
+        } else {
+          messageInput.placeholder = `Ask the panel (or mention a terpene by name)...`;
+        }
+      }
+    }
+
+    function setMode(mode) {
+      currentMode = mode;
+      document.getElementById('textModeBtn').classList.toggle('active', mode === 'text');
+      document.getElementById('audioModeBtn').classList.toggle('active', mode === 'audio');
+      document.getElementById('textInputWrapper').style.display = mode === 'text' ? 'flex' : 'none';
+      document.getElementById('audioInputWrapper').style.display = mode === 'audio' ? 'flex' : 'none';
+    }
+
+    function addMessage(role, content, audioUrl = null, terpeneId = null) {
+      const messagesDiv = document.getElementById('messages');
+      const messageDiv = document.createElement('div');
+      messageDiv.className = `message ${role}`;
+      
+      const avatar = document.createElement('div');
+      avatar.className = 'message-avatar';
+      if (role === 'user') {
+        avatar.textContent = '👤';
+      } else {
+        // Use terpene-specific emoji
+        const terpene = terpenes.find(t => t.id === terpeneId) || terpenes.find(t => t.id === activeTerpenes[0]);
+        avatar.textContent = terpene ? terpene.emoji : '🌿';
+      }
+      
+      const contentDiv = document.createElement('div');
+      contentDiv.className = 'message-content';
+      contentDiv.textContent = content;
+      
+      // Add audio controls for assistant messages
+      if (role === 'assistant' && audioUrl) {
+        const audioControls = document.createElement('div');
+        audioControls.className = 'audio-controls';
+        const audio = document.createElement('audio');
+        audio.src = audioUrl;
+        audio.controls = true;
+        audio.style.width = '100%';
+        audioControls.appendChild(audio);
+        contentDiv.appendChild(audioControls);
+      }
+      
+      messageDiv.appendChild(avatar);
+      messageDiv.appendChild(contentDiv);
+      messagesDiv.appendChild(messageDiv);
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    async function sendMessage() {
+      const input = document.getElementById('messageInput');
+      const message = input.value.trim();
+      if (!message) return;
+
+      addMessage('user', message);
+      input.value = '';
+      input.style.height = 'auto';
+
+      const sendButton = document.getElementById('sendButton');
+      sendButton.disabled = true;
+      sendButton.innerHTML = '<span class="loading"></span>';
+
+      try {
+        const apiUrl = localStorage.getItem('api_url');
+        if (!apiUrl) {
+          throw new Error('API URL not configured. Please enter your Cloud Run service URL.');
+        }
+        const response = await fetch(`${apiUrl}/api/chat`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            message: message,
+            active_terpenes: activeTerpenes,
+            conversation_history: conversationHistory,
+          }),
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.detail || 'Failed to get response');
+        }
+
+        const data = await response.json();
+        
+        // Handle multiple responses (panel mode)
+        let assistantMessage = null;
+        let firstResponse = null;
+        
+        if (data.responses && Array.isArray(data.responses)) {
+          // Multiple terpenes responded
+          data.responses.forEach(resp => {
+            addMessage('assistant', resp.response, null, resp.terpene_id);
+          });
+          conversationHistory = data.conversation_history;
+          firstResponse = data.responses[0];
+          assistantMessage = firstResponse.response;
+        } else {
+          // Single response (backward compatibility)
+          assistantMessage = data.response || data.responses?.[0]?.response;
+          const terpeneId = data.responses?.[0]?.terpene_id || activeTerpenes[0];
+          addMessage('assistant', assistantMessage, null, terpeneId);
+          conversationHistory = data.conversation_history || conversationHistory;
+          firstResponse = { response: assistantMessage, terpene_id: terpeneId };
+        }
+        
+        // Get TTS audio (using first responding terpene's voice) - only for single response
+        if (firstResponse && data.responses && data.responses.length === 1) {
+          let audioUrl = null;
+          try {
+            const ttsFormData = new FormData();
+            ttsFormData.append('text', firstResponse.response);
+            ttsFormData.append('terpene_id', firstResponse.terpene_id);
+            
+            const ttsResponse = await fetch(`${apiUrl}/api/tts`, {
+              method: 'POST',
+              body: ttsFormData,
+            });
+            
+            if (ttsResponse.ok) {
+              const audioBlob = await ttsResponse.blob();
+              audioUrl = URL.createObjectURL(audioBlob);
+              // Update the message with audio
+              const messages = document.getElementById('messages');
+              const lastMessage = messages.lastElementChild;
+              if (lastMessage && lastMessage.classList.contains('assistant')) {
+                const audioControls = lastMessage.querySelector('.audio-controls');
+                if (audioControls) {
+                  const audio = document.createElement('audio');
+                  audio.src = audioUrl;
+                  audio.controls = true;
+                  audioControls.appendChild(audio);
+                }
+              }
+            }
+          } catch (ttsError) {
+            console.warn('TTS failed:', ttsError);
+          }
+        }
+      } catch (error) {
+        console.error('Error:', error);
+        addMessage('assistant', `Sorry, I encountered an error: ${error.message}. Please check your API URL and try again.`);
+      } finally {
+        sendButton.disabled = false;
+        sendButton.textContent = 'Send';
+      }
+    }
+
+    async function toggleRecording() {
+      if (!isRecording) {
+        await startRecording();
+      } else {
+        await stopRecording();
+      }
+    }
+
+    async function startRecording() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        mediaRecorder = new MediaRecorder(stream, {
+          mimeType: 'audio/webm;codecs=opus'
+        });
+        
+        audioChunks = [];
+        
+        mediaRecorder.ondataavailable = (event) => {
+          audioChunks.push(event.data);
+        };
+        
+        mediaRecorder.onstop = async () => {
+          const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+          await sendAudioMessage(audioBlob);
+          stream.getTracks().forEach(track => track.stop());
+        };
+        
+        mediaRecorder.start();
+        isRecording = true;
+        document.getElementById('recordButton').classList.add('recording');
+        document.getElementById('recordButton').textContent = '⏹️';
+        document.getElementById('recordingStatus').textContent = 'Recording... Click to stop';
+      } catch (error) {
+        console.error('Error accessing microphone:', error);
+        alert('Microphone access denied. Please allow microphone access and try again.');
+      }
+    }
+
+    async function stopRecording() {
+      if (mediaRecorder && isRecording) {
+        mediaRecorder.stop();
+        isRecording = false;
+        document.getElementById('recordButton').classList.remove('recording');
+        document.getElementById('recordButton').textContent = '🎤';
+        document.getElementById('recordingStatus').textContent = 'Processing...';
+      }
+    }
+
+    async function sendAudioMessage(audioBlob) {
+      try {
+        const apiUrl = localStorage.getItem('api_url');
+        if (!apiUrl) {
+          throw new Error('API URL not configured. Please enter your Cloud Run service URL.');
+        }
+        
+        // Use the complete audio chat endpoint
+        const formData = new FormData();
+        formData.append('audio_file', audioBlob, 'recording.webm');
+        formData.append('active_terpenes', JSON.stringify(activeTerpenes));
+        formData.append('conversation_history', JSON.stringify(conversationHistory));
+        formData.append('language', 'en-US');
+        
+        const response = await fetch(`${apiUrl}/api/chat-audio`, {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.detail || 'Failed to process audio');
+        }
+
+        // Get transcript, response text, and terpene info from headers
+        const userTranscript = response.headers.get('X-User-Transcript') || '[Audio message]';
+        const assistantText = response.headers.get('X-Assistant-Text') || '[Audio response]';
+        const terpeneId = response.headers.get('X-Terpene-ID') || activeTerpenes[0];
+
+        // Get audio response
+        const audioBlob = await response.blob();
+        const audioUrl = URL.createObjectURL(audioBlob);
+        
+        // Add messages
+        addMessage('user', userTranscript);
+        addMessage('assistant', assistantText, audioUrl, terpeneId);
+        
+        // Update conversation history
+        conversationHistory.push(
+          { role: 'user', content: userTranscript },
+          { role: 'assistant', content: assistantText, terpene_id: terpeneId }
+        );
+        
+        document.getElementById('recordingStatus').textContent = 'Click to start recording';
+      } catch (error) {
+        console.error('Error:', error);
+        addMessage('assistant', `Sorry, I encountered an error: ${error.message}. Please try again.`);
+        document.getElementById('recordingStatus').textContent = 'Error. Click to try again';
+      }
+    }
+
+    function handleKeyDown(event) {
+      if (event.key === 'Enter' && !event.shiftKey) {
+        event.preventDefault();
+        sendMessage();
+      }
+    }
+
+    // Auto-resize textarea
+    document.getElementById('messageInput').addEventListener('input', function() {
+      this.style.height = 'auto';
+      this.style.height = Math.min(this.scrollHeight, 150) + 'px';
+    });
+
+    // Load API URL on page load
+    loadApiUrl();
+  </script>
+</body>
+</html>
