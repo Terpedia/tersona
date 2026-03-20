@@ -1,12 +1,13 @@
 """
-Cloud Function to proxy Vertex AI Gemini calls
+Cloud Function for Terpene Chat - Vertex AI + STT/TTS
 Uses service account authentication (no API key needed)
 """
 import functions_framework
-from flask import Request, jsonify, make_response
+from flask import Request, jsonify, make_response, request as flask_request
 import os
 import json
 from typing import List, Dict, Optional
+import base64
 
 # Google Cloud project and location
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "terpedia-489015")
@@ -16,11 +17,30 @@ GOOGLE_LOCATION = os.getenv("GOOGLE_LOCATION", "us-central1")
 try:
     from google.cloud import aiplatform
     from vertexai.generative_models import GenerativeModel
+    from google.cloud import speech_v1, texttospeech_v1
     aiplatform.init(project=GOOGLE_CLOUD_PROJECT, location=GOOGLE_LOCATION)
     VERTEX_AI_AVAILABLE = True
+    SPEECH_AVAILABLE = True
 except Exception as e:
     VERTEX_AI_AVAILABLE = False
-    print(f"Warning: Vertex AI not available: {e}")
+    SPEECH_AVAILABLE = False
+    print(f"Warning: Google Cloud services not available: {e}")
+
+# Initialize Speech clients lazily
+speech_client = None
+tts_client = None
+
+def get_speech_client():
+    global speech_client
+    if speech_client is None and SPEECH_AVAILABLE:
+        speech_client = speech_v1.SpeechClient()
+    return speech_client
+
+def get_tts_client():
+    global tts_client
+    if tts_client is None and SPEECH_AVAILABLE:
+        tts_client = texttospeech_v1.TextToSpeechClient()
+    return tts_client
 
 # Terpene system prompts (simplified - full version in terpenes.py)
 TERPENE_PROMPTS = {
@@ -99,6 +119,24 @@ def validate_origin(request: Request) -> bool:
 
 
 @functions_framework.http
+def terpene_api(request: Request):
+    """
+    Main entry point - routes to chat, stt, or tts based on path
+    """
+    path = request.path.strip('/')
+    
+    if path == 'chat' or path == '':
+        return chat(request)
+    elif path == 'stt':
+        return stt(request)
+    elif path == 'tts':
+        return tts(request)
+    elif path == 'health':
+        return jsonify({"status": "ok", "service": "terpene-api"}), 200
+    else:
+        return jsonify({"error": "Not found"}), 404
+
+
 def chat(request: Request):
     """
     Proxy Gemini API calls
@@ -228,6 +266,167 @@ def chat(request: Request):
             "Access-Control-Allow-Origin": origin if validate_origin(request) else "null",
             "Content-Type": "application/json"
         }
+        
+    except Exception as e:
+        origin = request.headers.get("Origin", "")
+        return jsonify({"error": str(e)}), 500, {
+            "Access-Control-Allow-Origin": origin if validate_origin(request) else "null"
+        }
+
+
+@functions_framework.http
+def stt(request: Request):
+    """
+    Speech-to-Text endpoint
+    POST /stt
+    Body: multipart/form-data with audio file
+    """
+    # CORS
+    if request.method == "OPTIONS":
+        origin = request.headers.get("Origin", "")
+        if validate_origin(request):
+            return make_response("", 204, {
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+            })
+        return make_response("", 403, {})
+    
+    if request.method != "POST":
+        return jsonify({"error": "Method not allowed"}), 405
+    
+    if not validate_origin(request):
+        return jsonify({"error": "Forbidden: Request not from allowed origin"}), 403
+    
+    if not SPEECH_AVAILABLE:
+        return jsonify({"error": "Speech-to-Text not available"}), 500
+    
+    try:
+        # Get audio file from form data
+        if 'file' not in flask_request.files:
+            return jsonify({"error": "No audio file provided"}), 400
+        
+        audio_file = flask_request.files['file']
+        audio_content = audio_file.read()
+        language = flask_request.form.get('language', 'en-US')
+        
+        # Detect encoding from file extension
+        file_ext = audio_file.filename.split(".")[-1].lower() if audio_file.filename else "webm"
+        encoding_map = {
+            "webm": speech_v1.RecognitionConfig.AudioEncoding.WEBM_OPUS,
+            "mp3": speech_v1.RecognitionConfig.AudioEncoding.MP3,
+            "wav": speech_v1.RecognitionConfig.AudioEncoding.LINEAR16,
+            "flac": speech_v1.RecognitionConfig.AudioEncoding.FLAC,
+        }
+        encoding = encoding_map.get(file_ext, speech_v1.RecognitionConfig.AudioEncoding.WEBM_OPUS)
+        
+        # Configure recognition
+        config = speech_v1.RecognitionConfig(
+            encoding=encoding,
+            sample_rate_hertz=48000,
+            language_code=language,
+            enable_automatic_punctuation=True,
+            model="latest_long",
+        )
+        
+        audio = speech_v1.RecognitionAudio(content=audio_content)
+        
+        # Perform transcription
+        client = get_speech_client()
+        response = client.recognize(config=config, audio=audio)
+        
+        # Extract transcript
+        transcript = ""
+        if response.results:
+            transcript = response.results[0].alternatives[0].transcript
+        
+        origin = request.headers.get("Origin", "")
+        return jsonify({"text": transcript, "language": language}), 200, {
+            "Access-Control-Allow-Origin": origin if validate_origin(request) else "null"
+        }
+        
+    except Exception as e:
+        origin = request.headers.get("Origin", "")
+        return jsonify({"error": str(e)}), 500, {
+            "Access-Control-Allow-Origin": origin if validate_origin(request) else "null"
+        }
+
+
+@functions_framework.http
+def tts(request: Request):
+    """
+    Text-to-Speech endpoint
+    POST /tts
+    Body: form-data with text, terpene_id, speed
+    Returns: MP3 audio
+    """
+    # CORS
+    if request.method == "OPTIONS":
+        origin = request.headers.get("Origin", "")
+        if validate_origin(request):
+            return make_response("", 204, {
+                "Access-Control-Allow-Origin": origin,
+                "Access-Control-Allow-Methods": "POST, OPTIONS",
+                "Access-Control-Allow-Headers": "Content-Type",
+            })
+        return make_response("", 403, {})
+    
+    if request.method != "POST":
+        return make_response("Method not allowed", 405)
+    
+    if not validate_origin(request):
+        return make_response("Forbidden", 403)
+    
+    if not SPEECH_AVAILABLE:
+        return make_response("Text-to-Speech not available", 500)
+    
+    try:
+        from terpenes import get_terpene
+        
+        # Get form data
+        text = flask_request.form.get('text', '')
+        terpene_id = flask_request.form.get('terpene_id', 'terpenequeen')
+        speed = float(flask_request.form.get('speed', 1.0))
+        
+        if not text:
+            return make_response("No text provided", 400)
+        
+        # Get terpene persona for voice
+        terpene = get_terpene(terpene_id)
+        google_voice = terpene["voice"]
+        
+        # Configure synthesis
+        input_text = texttospeech_v1.SynthesisInput(text=text)
+        
+        # Voice configuration
+        voice_config = texttospeech_v1.VoiceSelectionParams(
+            language_code="-".join(google_voice.split("-")[:2]),
+            name=google_voice,
+        )
+        
+        # Audio configuration
+        audio_config = texttospeech_v1.AudioConfig(
+            audio_encoding=texttospeech_v1.AudioEncoding.MP3,
+            speaking_rate=speed,
+        )
+        
+        # Perform synthesis
+        client = get_tts_client()
+        response = client.synthesize_speech(
+            input=input_text,
+            voice=voice_config,
+            audio_config=audio_config,
+        )
+        
+        origin = request.headers.get("Origin", "")
+        return make_response(
+            response.audio_content,
+            200,
+            {
+                "Content-Type": "audio/mpeg",
+                "Access-Control-Allow-Origin": origin if validate_origin(request) else "null"
+            }
+        )
         
     except Exception as e:
         origin = request.headers.get("Origin", "")

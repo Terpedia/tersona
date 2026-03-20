@@ -25,12 +25,12 @@ gcloud functions deploy "$FUNCTION_NAME" \
   --runtime python311 \
   --region "$REGION" \
   --source . \
-  --entry-point chat \
+  --entry-point terpene_api \
   --trigger-http \
   --allow-unauthenticated \
   --project "$PROJECT_ID" \
-  --memory 512MB \
-  --timeout 60s \
+  --memory 1GB \
+  --timeout 300s \
   --max-instances 10 \
   --service-account "terpenequeen-api@terpedia-489015.iam.gserviceaccount.com" \
   --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_LOCATION=$REGION" \
@@ -40,12 +40,12 @@ gcloud functions deploy "$FUNCTION_NAME" \
     --runtime python311 \
     --region "$REGION" \
     --source . \
-    --entry-point chat \
+    --entry-point terpene_api \
     --trigger-http \
     --allow-unauthenticated \
     --project "$PROJECT_ID" \
-    --memory 512MB \
-    --timeout 60s \
+    --memory 1GB \
+    --timeout 300s \
     --max-instances 10 \
     --set-env-vars "GOOGLE_CLOUD_PROJECT=$PROJECT_ID,GOOGLE_LOCATION=$REGION"
 
@@ -60,5 +60,9 @@ echo ""
 echo "✅ Deployment complete!"
 echo "Function URL: $FUNCTION_URL"
 echo ""
-echo "Update your frontend to use this URL for chat API calls"
-echo "Example: ${FUNCTION_URL}/chat"
+echo "Endpoints:"
+echo "  - Chat: ${FUNCTION_URL}/chat"
+echo "  - STT: ${FUNCTION_URL}/stt"
+echo "  - TTS: ${FUNCTION_URL}/tts"
+echo ""
+echo "Update your frontend to use this URL for all API calls"
