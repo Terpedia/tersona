@@ -428,7 +428,7 @@
       </div>
 
       <div id="audioInputWrapper" class="audio-input-wrapper" style="display: none;">
-        <button id="recordButton" class="record-button" onclick="toggleRecording()">🎤</button>
+        <button id="recordButton" class="record-button">🎤</button>
         <div class="recording-status" id="recordingStatus">Click to start recording</div>
       </div>
     </div>
@@ -854,6 +854,12 @@
       const audioModeBtn = document.getElementById('audioModeBtn');
       if (audioModeBtn) {
         audioModeBtn.addEventListener('click', () => setMode('audio'));
+      }
+      
+      // Record button click
+      const recordButton = document.getElementById('recordButton');
+      if (recordButton) {
+        recordButton.addEventListener('click', toggleRecording);
       }
     });
 
