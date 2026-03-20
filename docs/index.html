@@ -459,9 +459,10 @@
     }
 
     async function loadApiUrl() {
-      API_URL = localStorage.getItem('api_url') || '';
+      API_URL = localStorage.getItem('api_url') || DEFAULT_API_URL;
       
-      if (API_URL) {
+      // Always hide config and show chat (API URL is set by default)
+      if (true) {
         document.getElementById('apiConfig').style.display = 'none';
         document.getElementById('chatContainer').style.display = 'flex';
         await loadTerpenes();
@@ -473,10 +474,6 @@
         if (firstTerpene?.greeting) {
           addMessage('assistant', firstTerpene.greeting, null, 'terpenequeen');
         }
-      } else {
-        // Show API config if no URL is set
-        document.getElementById('apiUrlInput').placeholder = 'https://gemini-proxy-xxx.run.app';
-      }
     }
 
     async function loadTerpenes() {
