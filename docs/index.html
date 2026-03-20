@@ -122,6 +122,62 @@
       border-bottom-left-radius: 4px;
     }
 
+    /* Gentle tints for different terpenes */
+    .message.terpenequeen .message-content {
+      background: #f0f4f8;
+      border-left: 3px solid #667eea;
+    }
+
+    .message.limonene .message-content {
+      background: #fffbf0;
+      border-left: 3px solid #ffd700;
+    }
+
+    .message.myrcene .message-content {
+      background: #f5f0e8;
+      border-left: 3px solid #8b7355;
+    }
+
+    .message.pinene .message-content {
+      background: #f0f8f0;
+      border-left: 3px solid #90ee90;
+    }
+
+    .message.linalool .message-content {
+      background: #f5f0f8;
+      border-left: 3px solid #dda0dd;
+    }
+
+    .message.caryophyllene .message-content {
+      background: #fff5f0;
+      border-left: 3px solid #ff6347;
+    }
+
+    .message.humulene .message-content {
+      background: #f8f5f0;
+      border-left: 3px solid #daa520;
+    }
+
+    .message.terpinolene .message-content {
+      background: #f0f8f5;
+      border-left: 3px solid #3cb371;
+    }
+
+    .message.ocimene .message-content {
+      background: #fff0f5;
+      border-left: 3px solid #ff69b4;
+    }
+
+    .message.bisabolol .message-content {
+      background: #fffef0;
+      border-left: 3px solid #f0e68c;
+    }
+
+    .message.geraniol .message-content {
+      background: #fff0f8;
+      border-left: 3px solid #ffb6c1;
+    }
+
     .audio-controls {
       display: flex;
       gap: 0.5rem;
@@ -499,7 +555,13 @@
     function addMessage(role, content, audioUrl = null, terpeneId = null) {
       const messagesDiv = document.getElementById('messages');
       const messageDiv = document.createElement('div');
-      messageDiv.className = `message ${role}`;
+      
+      // Build class name with terpene-specific class for assistant messages
+      let className = `message ${role}`;
+      if (role === 'assistant' && terpeneId) {
+        className += ` ${terpeneId}`;
+      }
+      messageDiv.className = className;
       
       const avatar = document.createElement('div');
       avatar.className = 'message-avatar';
