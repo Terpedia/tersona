@@ -123,18 +123,19 @@ def terpene_api(request: Request):
     """
     Main entry point - routes to chat, stt, or tts based on path
     """
+    # Get path from request (Cloud Functions Gen2 path format)
     path = request.path.strip('/')
     
-    if path == 'chat' or path == '':
-        return chat(request)
-    elif path == 'stt':
+    # Route based on path
+    if '/stt' in path or path.endswith('stt'):
         return stt(request)
-    elif path == 'tts':
+    elif '/tts' in path or path.endswith('tts'):
         return tts(request)
-    elif path == 'health':
+    elif '/health' in path or path.endswith('health'):
         return jsonify({"status": "ok", "service": "terpene-api"}), 200
     else:
-        return jsonify({"error": "Not found"}), 404
+        # Default to chat (handles /chat, /, and root)
+        return chat(request)
 
 
 def chat(request: Request):
@@ -274,7 +275,6 @@ def chat(request: Request):
         }
 
 
-@functions_framework.http
 def stt(request: Request):
     """
     Speech-to-Text endpoint
@@ -352,7 +352,6 @@ def stt(request: Request):
         }
 
 
-@functions_framework.http
 def tts(request: Request):
     """
     Text-to-Speech endpoint
