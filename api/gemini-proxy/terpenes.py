@@ -386,8 +386,21 @@ def build_host_panel_context(active_terpene_ids: List[str]) -> str:
         "- You know this roster. When a question matches a guest's expertise, invite them by name to answer — do not speak at length on their behalf.",
         "- For focus, alertness, clarity, pine/forest associations: invite Alpha-Pinene (Pinene) if listed above.",
         "- Keep your own turn short when handing off; end with a clear question directed at the guest by name.",
+        "- After a guest answers, you will often speak again briefly: acknowledge them, then ask a follow-up to the user or another guest — keep guiding the conversation.",
     ])
     return "\n".join(lines)
+
+
+def build_host_followup_system_addon() -> str:
+    """Appended to TerpeneQueen's system instruction for the moderator follow-up turn."""
+    return """
+MODERATOR FOLLOW-UP (this message only):
+A guest terpene has just spoken after you. You are still hosting.
+- Briefly acknowledge what they said (one short sentence).
+- Then ask ONE follow-up question — to the user, to the same guest, or to another guest on the panel.
+- Keep the entire reply to 2-4 sentences. Plain text only.
+- Do not repeat your full previous host message; move the conversation forward.
+"""
 
 
 def list_terpenes() -> List[Dict]:

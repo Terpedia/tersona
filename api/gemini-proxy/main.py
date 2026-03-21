@@ -628,6 +628,76 @@ def chat(request: Request):
                     # Continue even if invitation detection fails
                     pass
         
+        # TerpeneQueen moderator follow-up: after a guest speaks in this same request, host reacts + asks follow-up
+        if "terpenequeen" in active_terpenes and responses:
+            guest_responses = [
+                r for r in responses
+                if r.get("terpene_id") and r["terpene_id"] != "terpenequeen"
+            ]
+            host_responses = [r for r in responses if r.get("terpene_id") == "terpenequeen"]
+            if guest_responses and host_responses:
+                try:
+                    from terpenes import get_terpene, build_host_panel_context, build_host_followup_system_addon
+                    tq = get_terpene("terpenequeen")
+                    follow_sys = (tq.get("system_prompt", TERPENE_PROMPTS["terpenequeen"])
+                                  + build_host_followup_system_addon())
+                    panel_ctx = build_host_panel_context(active_terpenes)
+                    if panel_ctx:
+                        follow_sys += "\n\n" + panel_ctx
+                    if "plain text" not in follow_sys.lower() and "markdown" not in follow_sys.lower():
+                        follow_sys += "\n\nIMPORTANT: Respond in plain text only - no markdown formatting."
+                    
+                    # Summarize all guest turns this round (there may be more than one)
+                    guest_blocks = []
+                    for gr in guest_responses:
+                        gid = gr["terpene_id"]
+                        preview = gr.get("response", "")[:1200]
+                        guest_blocks.append(f"- {gid} said:\n\"{preview}\"")
+                    guests_text = "\n\n".join(guest_blocks)
+                    
+                    follow_user_message = (
+                        f"You are still live on the mic as host. The user's latest message was:\n\"{message}\"\n\n"
+                        f"Guest speaker(s) in this segment just said:\n{guests_text}\n\n"
+                        "Acknowledge what they contributed (briefly). Then ask ONE follow-up question — "
+                        "to the user, to the same guest, or to another guest on the panel. "
+                        "Keep the conversation moving."
+                    )
+                    
+                    GenerativeModel = get_generative_model()
+                    follow_model = GenerativeModel(
+                        model_name="gemini-2.0-flash-001",
+                        system_instruction=follow_sys,
+                    )
+                    follow_history = build_vertex_chat_history(updated_history)
+                    if follow_history:
+                        follow_chat = follow_model.start_chat(history=follow_history)
+                        follow_resp = follow_chat.send_message(follow_user_message)
+                    else:
+                        follow_resp = follow_model.generate_content(follow_user_message)
+                    
+                    follow_text = follow_resp.text if follow_resp and hasattr(follow_resp, "text") else None
+                    if not follow_text and follow_resp and hasattr(follow_resp, "candidates") and follow_resp.candidates:
+                        cand = follow_resp.candidates[0]
+                        if hasattr(cand, "content") and hasattr(cand.content, "parts") and cand.content.parts:
+                            follow_text = cand.content.parts[0].text
+                    
+                    follow_text = strip_markdown(follow_text or "Thanks for sharing that! What would you like to dig into next?")
+                    
+                    responses.append({
+                        "terpene_id": "terpenequeen",
+                        "response": follow_text,
+                    })
+                    updated_history.append({
+                        "role": "assistant",
+                        "content": follow_text,
+                        "terpene_id": "terpenequeen",
+                    })
+                    print(f"DEBUG: Host follow-up generated ({len(follow_text)} chars)")
+                except Exception as host_fu_err:
+                    print(f"DEBUG: Host follow-up failed: {host_fu_err}")
+                    import traceback
+                    print(traceback.format_exc())
+        
         origin = request.headers.get("Origin", "")
         return jsonify({
             "responses": responses,
