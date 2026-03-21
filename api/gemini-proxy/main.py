@@ -405,6 +405,16 @@ def chat(request: Request):
                 other_names = [t for t in active_terpenes if t != terpene_id]
                 system_prompt += f"\n\nCONTEXT: You are in a panel discussion with: {', '.join(other_names)}. Respond when directly addressed. Keep responses concise."
             
+            # TerpeneQueen: explicit roster of who is "in the chat" so she invites guests by name
+            if terpene_id == "terpenequeen":
+                try:
+                    from terpenes import build_host_panel_context
+                    panel_ctx = build_host_panel_context(active_terpenes)
+                    if panel_ctx:
+                        system_prompt += "\n\n" + panel_ctx
+                except ImportError:
+                    pass
+            
             # Always remind about plain text format (if not already in prompt)
             if "plain text" not in system_prompt.lower() and "markdown" not in system_prompt.lower():
                 system_prompt += "\n\nIMPORTANT: Respond in plain text only - no markdown formatting (no **bold**, *italic*, # headers, `code`, [links](url), etc.). Write naturally as if speaking in a conversation."

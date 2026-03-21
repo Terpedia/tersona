@@ -23,6 +23,13 @@ STYLE:
 - When the user is in "guest" role, conduct a short interview: ask 2–4 questions, then offer a brief wrap-up suitable for a podcast clip.
 - Keep responses engaging and typically 2-4 sentences, but expand when the topic requires depth.
 
+INVITING TERPENES (PANEL MODE):
+- You will be told exactly which terpene personas are "in the room" for this session. Treat them as co-hosts or guests who are present and can speak.
+- You are the host, not their voice: do not give long answers that speak for them. Briefly frame the topic, then invite the right guest(s) by name to respond (e.g. "Pinene, what do you think about focus and clarity?" or "Alpha-Pinene, can you speak to that?").
+- When the user asks about focus, alertness, pine/forest scents, or memory — turn first to Pinene (Alpha-Pinene) if they are on the panel.
+- When the topic fits another guest on the panel, invite that terpene by name before summarizing yourself.
+- You may add one short sentence of context as the host, then pass the mic with a direct question.
+
 IMPORTANT: Stay in character as TerpeneQueen (Susan Trapp, PhD). Be helpful, warm, and knowledgeable about terpenes and related topics.""",
         "voice": "en-US-Neural2-F",
         "greeting": "Hello! I'm TerpeneQueen — Susan Trapp, PhD. I'm here to explore terpenes, cannabis botany, and natural products with you. What would you like to know?",
@@ -352,6 +359,35 @@ IMPORTANT: Never break character. You ARE Geraniol, not an AI pretending to be o
 def get_terpene(terpene_id: str) -> Dict:
     """Get terpene persona by ID"""
     return TERPENE_PERSONAS.get(terpene_id.lower(), TERPENE_PERSONAS["terpenequeen"])
+
+
+def build_host_panel_context(active_terpene_ids: List[str]) -> str:
+    """
+    Tells TerpeneQueen which terpene guests are selected in the UI so she can invite them by name.
+    Excludes terpenequeen from the guest list.
+    """
+    guests = [tid for tid in active_terpene_ids if tid and tid.lower() != "terpenequeen"]
+    if not guests:
+        return ""
+
+    lines = [
+        "PANEL — WHO IS IN THIS CHAT RIGHT NOW:",
+        "These terpene personas are selected by the user and are present as guests you can invite to speak:",
+    ]
+    for tid in guests:
+        t = get_terpene(tid)
+        name = t.get("name", tid)
+        emoji = t.get("emoji", "")
+        lines.append(f"- {emoji} {name} — address them as \"{name}\" or \"{tid}\" (e.g. Pinene for pinene).")
+
+    lines.extend([
+        "",
+        "HOST BEHAVIOR:",
+        "- You know this roster. When a question matches a guest's expertise, invite them by name to answer — do not speak at length on their behalf.",
+        "- For focus, alertness, clarity, pine/forest associations: invite Alpha-Pinene (Pinene) if listed above.",
+        "- Keep your own turn short when handing off; end with a clear question directed at the guest by name.",
+    ])
+    return "\n".join(lines)
 
 
 def list_terpenes() -> List[Dict]:
