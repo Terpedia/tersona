@@ -283,6 +283,50 @@
       box-shadow: 0 6px 16px rgba(102, 126, 234, 0.5);
     }
 
+    .voice-pulse-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 48px;
+    }
+
+    .voice-pulse {
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      background: #43a047;
+      opacity: 0.85;
+      transition: transform 0.15s ease, background 0.2s;
+    }
+
+    .voice-pulse.active {
+      animation: voicePulse 1.2s ease-in-out infinite;
+    }
+
+    .voice-pulse.speaking {
+      background: #667eea;
+      transform: scale(1.35);
+    }
+
+    @keyframes voicePulse {
+      0%, 100% { transform: scale(1); opacity: 0.85; }
+      50% { transform: scale(1.15); opacity: 1; }
+    }
+
+    .voice-toggle-btn {
+      padding: 0.5rem 1rem;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      background: #fff;
+      color: #555;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+
+    .voice-toggle-btn:hover {
+      background: #f5f5f5;
+    }
+
     .record-button.recording {
       background: #f5576c;
       animation: pulse 1.5s ease-in-out infinite;
@@ -401,7 +445,7 @@
 </head>
 <body>
   <div class="header">
-    <h1 id="headerTitle">🌿 TerpeneQueen — Susan Trapp, PhD</h1>
+    <h1 id="headerTitle">🫅🏼 TerpeneQueen — Susan Trapp, PhD</h1>
     <p>Chat with terpenes! Each has a distinct personality and voice. Select multiple terpenes for a panel discussion. Terpenes respond when you mention them by name.</p>
     <div class="terpene-selector" id="terpeneSelector" style="margin-top: 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center;">
       <!-- Terpenes will be loaded here -->
@@ -428,8 +472,11 @@
       </div>
 
       <div id="audioInputWrapper" class="audio-input-wrapper" style="display: none;">
-        <button id="recordButton" class="record-button">🎤</button>
-        <div class="recording-status" id="recordingStatus">Click to start recording</div>
+        <div class="voice-pulse-wrap" id="voicePulseWrap" aria-hidden="true">
+          <span class="voice-pulse" id="voicePulse" title="Listening"></span>
+        </div>
+        <div class="recording-status" id="recordingStatus">Preparing microphone…</div>
+        <button type="button" id="voiceToggleMic" class="voice-toggle-btn">Stop microphone</button>
       </div>
     </div>
   </div>
@@ -447,10 +494,20 @@
     
     let conversationHistory = [];
     let currentMode = 'text';
-    let mediaRecorder = null;
-    let audioChunks = [];
-    let isRecording = false;
     let currentAudio = null;
+    // Voice activity detection (hands-free)
+    let voiceStream = null;
+    let voiceAudioContext = null;
+    let voiceAnalyser = null;
+    let vadDataArray = null;
+    let vadRafId = null;
+    let utteranceRecorder = null;
+    let utteranceChunks = [];
+    let vadRecordingState = 'off'; // off | waiting | recording | processing
+    let vadMaybeSpeechAt = 0;
+    let vadSilenceAt = 0;
+    let utteranceRecorderStartedAt = 0;
+    let maxRecordingTimer = null;
     let activeTerpenes = ['terpenequeen']; // Multiple terpenes can be active
     let terpenes = [];
 
@@ -472,7 +529,7 @@
     async function loadTerpenes() {
       // Use hardcoded terpenes (no API call needed)
       terpenes = [
-        { id: 'terpenequeen', name: 'TerpeneQueen', emoji: '🌿', greeting: "Hello! I'm TerpeneQueen — Susan Trapp, PhD. I'm here to explore terpenes, cannabis botany, and natural products with you. What would you like to know?" },
+        { id: 'terpenequeen', name: 'TerpeneQueen', emoji: '🫅🏼', greeting: "Hello! I'm TerpeneQueen — Susan Trapp, PhD. I'm here to explore terpenes, cannabis botany, and natural products with you. What would you like to know?" },
         { id: 'limonene', name: 'Limonene', emoji: '🍋', greeting: "Ciao bella! I'm Limonene, fresh as a lemon grove in Sicily. Ready to brighten your day?" },
         { id: 'myrcene', name: 'Myrcene', emoji: '🥭', greeting: "Olá, friend. I'm Myrcene, born from the Amazon mango trees. Let's slow down together..." },
         { id: 'pinene', name: 'Alpha-Pinene', emoji: '🌲', greeting: "Hej! I'm Alpha-Pinene from the Swedish forests. Let me help clear your mind like a walk through the pines." },
@@ -550,6 +607,11 @@
       document.getElementById('audioModeBtn').classList.toggle('active', mode === 'audio');
       document.getElementById('textInputWrapper').style.display = mode === 'text' ? 'flex' : 'none';
       document.getElementById('audioInputWrapper').style.display = mode === 'audio' ? 'flex' : 'none';
+      if (mode === 'audio') {
+        startHandsFreeVoice();
+      } else {
+        stopHandsFreeVoice();
+      }
     }
 
     function addMessage(role, content, audioUrl = null, terpeneId = null) {
@@ -570,7 +632,7 @@
       } else {
         // Use terpene-specific emoji
         const terpene = terpenes.find(t => t.id === terpeneId) || terpenes.find(t => t.id === activeTerpenes[0]);
-        avatar.textContent = terpene ? terpene.emoji : '🌿';
+        avatar.textContent = terpene ? terpene.emoji : '🫅🏼';
       }
       
       const contentDiv = document.createElement('div');
@@ -694,78 +756,229 @@
       }
     }
 
-    async function toggleRecording() {
-      if (!isRecording) {
-        await startRecording();
-      } else {
-        await stopRecording();
+    function pickAudioMimeType() {
+      const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'];
+      for (const t of types) {
+        if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(t)) return t;
+      }
+      return '';
+    }
+
+    function computeRmsTimeDomain(analyser, dataArray) {
+      analyser.getByteTimeDomainData(dataArray);
+      let sum = 0;
+      for (let i = 0; i < dataArray.length; i++) {
+        const v = (dataArray[i] - 128) / 128;
+        sum += v * v;
+      }
+      return Math.sqrt(sum / dataArray.length);
+    }
+
+    function setVoiceUiStatus(text, pulseClass) {
+      const el = document.getElementById('recordingStatus');
+      const pulse = document.getElementById('voicePulse');
+      if (el) el.textContent = text;
+      if (pulse) {
+        pulse.classList.toggle('active', pulseClass === 'active' || pulseClass === 'speaking');
+        pulse.classList.toggle('speaking', pulseClass === 'speaking');
       }
     }
 
-    async function startRecording() {
+    async function startHandsFreeVoice() {
+      stopHandsFreeVoice();
+      setVoiceUiStatus('Requesting microphone…', '');
       try {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        mediaRecorder = new MediaRecorder(stream, {
-          mimeType: 'audio/webm;codecs=opus'
+        voiceStream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
         });
-        
-        audioChunks = [];
-        
-        mediaRecorder.ondataavailable = (event) => {
-          audioChunks.push(event.data);
+        voiceAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = voiceAudioContext.createMediaStreamSource(voiceStream);
+        voiceAnalyser = voiceAudioContext.createAnalyser();
+        voiceAnalyser.fftSize = 2048;
+        vadDataArray = new Uint8Array(voiceAnalyser.fftSize);
+        source.connect(voiceAnalyser);
+
+        vadRecordingState = 'waiting';
+        setVoiceUiStatus('Listening — speak naturally. I detect when you pause.', 'active');
+        const micBtn = document.getElementById('voiceToggleMic');
+        if (micBtn) micBtn.textContent = 'Stop microphone';
+
+        const loop = () => {
+          if (vadRecordingState === 'off' || !voiceAnalyser || !vadDataArray) return;
+          const rms = computeRmsTimeDomain(voiceAnalyser, vadDataArray);
+          const now = performance.now();
+          // Threshold: tweak for mic sensitivity (0.02–0.06 typical)
+          const speech = rms > 0.038;
+
+          if (vadRecordingState === 'processing') {
+            vadRafId = requestAnimationFrame(loop);
+            return;
+          }
+
+          if (vadRecordingState === 'waiting') {
+            if (speech) {
+              if (!vadMaybeSpeechAt) vadMaybeSpeechAt = now;
+              if (now - vadMaybeSpeechAt > 180) {
+                beginUtteranceCapture();
+                vadRecordingState = 'recording';
+                vadSilenceAt = 0;
+                vadMaybeSpeechAt = 0;
+                setVoiceUiStatus('Hearing you…', 'speaking');
+              }
+            } else {
+              vadMaybeSpeechAt = 0;
+            }
+          } else if (vadRecordingState === 'recording' && utteranceRecorder && utteranceRecorder.state === 'recording') {
+            const recMs = now - utteranceRecorderStartedAt;
+            if (!speech) {
+              if (!vadSilenceAt) vadSilenceAt = now;
+              const silenceMs = now - vadSilenceAt;
+              if (silenceMs > 900 && recMs > 420) {
+                finishUtteranceCapture();
+                vadRecordingState = 'waiting';
+                vadSilenceAt = 0;
+                setVoiceUiStatus('Listening — speak naturally. I detect when you pause.', 'active');
+              }
+            } else {
+              vadSilenceAt = 0;
+            }
+            if (recMs > 28000 && utteranceRecorder.state === 'recording') {
+              finishUtteranceCapture();
+              vadRecordingState = 'waiting';
+              vadSilenceAt = 0;
+              setVoiceUiStatus('Listening — speak naturally. I detect when you pause.', 'active');
+            }
+          }
+          vadRafId = requestAnimationFrame(loop);
         };
-        
-        mediaRecorder.onstop = async () => {
-          const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-          await sendAudioMessage(audioBlob);
-          stream.getTracks().forEach(track => track.stop());
-        };
-        
-        mediaRecorder.start();
-        isRecording = true;
-        document.getElementById('recordButton').classList.add('recording');
-        document.getElementById('recordButton').textContent = '⏹️';
-        document.getElementById('recordingStatus').textContent = 'Recording... Click to stop';
-      } catch (error) {
-        console.error('Error accessing microphone:', error);
-        alert('Microphone access denied. Please allow microphone access and try again.');
+        vadRafId = requestAnimationFrame(loop);
+      } catch (e) {
+        console.error(e);
+        setVoiceUiStatus('Microphone unavailable. Check permissions.', '');
+        alert('Microphone access is needed for voice mode. Please allow access and try again.');
       }
     }
 
-    async function stopRecording() {
-      if (mediaRecorder && isRecording) {
-        mediaRecorder.stop();
-        isRecording = false;
-        document.getElementById('recordButton').classList.remove('recording');
-        document.getElementById('recordButton').textContent = '🎤';
-        document.getElementById('recordingStatus').textContent = 'Processing...';
+    function beginUtteranceCapture() {
+      if (!voiceStream) return;
+      const mime = pickAudioMimeType();
+      utteranceChunks = [];
+      try {
+        utteranceRecorder = mime
+          ? new MediaRecorder(voiceStream, { mimeType: mime })
+          : new MediaRecorder(voiceStream);
+      } catch (e) {
+        utteranceRecorder = new MediaRecorder(voiceStream);
+      }
+      utteranceRecorder.ondataavailable = (e) => {
+        if (e.data && e.data.size) utteranceChunks.push(e.data);
+      };
+      utteranceRecorder.onstop = async () => {
+        const blobType = utteranceRecorder && utteranceRecorder.mimeType ? utteranceRecorder.mimeType : 'audio/webm';
+        const blob = new Blob(utteranceChunks, { type: blobType });
+        utteranceChunks = [];
+        utteranceRecorder = null;
+        if (blob.size < 800) {
+          vadRecordingState = 'waiting';
+          setVoiceUiStatus('Listening — speak naturally. I detect when you pause.', 'active');
+          return;
+        }
+        vadRecordingState = 'processing';
+        setVoiceUiStatus('Processing what you said…', 'active');
+        await sendAudioMessage(blob);
+        if (currentMode === 'audio' && vadRecordingState !== 'off') {
+          vadRecordingState = 'waiting';
+          setVoiceUiStatus('Listening — speak naturally. I detect when you pause.', 'active');
+        }
+      };
+      utteranceRecorder.start(100);
+      utteranceRecorderStartedAt = performance.now();
+      if (maxRecordingTimer) clearTimeout(maxRecordingTimer);
+      maxRecordingTimer = setTimeout(() => {
+        if (utteranceRecorder && utteranceRecorder.state === 'recording') {
+          finishUtteranceCapture();
+        }
+      }, 28000);
+    }
+
+    function finishUtteranceCapture() {
+      if (maxRecordingTimer) {
+        clearTimeout(maxRecordingTimer);
+        maxRecordingTimer = null;
+      }
+      if (utteranceRecorder && utteranceRecorder.state === 'recording') {
+        utteranceRecorder.stop();
+      }
+    }
+
+    function stopHandsFreeVoice() {
+      vadRecordingState = 'off';
+      if (vadRafId) {
+        cancelAnimationFrame(vadRafId);
+        vadRafId = null;
+      }
+      if (maxRecordingTimer) {
+        clearTimeout(maxRecordingTimer);
+        maxRecordingTimer = null;
+      }
+      if (utteranceRecorder && utteranceRecorder.state === 'recording') {
+        try {
+          utteranceRecorder.stop();
+        } catch (e) {}
+      }
+      utteranceRecorder = null;
+      utteranceChunks = [];
+      if (voiceStream) {
+        voiceStream.getTracks().forEach((t) => t.stop());
+        voiceStream = null;
+      }
+      if (voiceAudioContext) {
+        voiceAudioContext.close().catch(() => {});
+        voiceAudioContext = null;
+      }
+      voiceAnalyser = null;
+      vadDataArray = null;
+      const pulse = document.getElementById('voicePulse');
+      if (pulse) {
+        pulse.classList.remove('active', 'speaking');
       }
     }
 
     async function sendAudioMessage(recordingBlob) {
+      const ext = (recordingBlob.type && recordingBlob.type.includes('mp4')) ? 'm4a' : 'webm';
+      const fname = `recording.${ext}`;
+
       try {
         if (!API_URL) {
-          throw new Error('API URL not configured. Please enter your Cloud Function URL.');
+          throw new Error('API URL not configured.');
         }
-        
-        // Step 1: STT - convert audio to text
+
         const sttFormData = new FormData();
-        sttFormData.append('file', recordingBlob, 'recording.webm');
+        sttFormData.append('file', recordingBlob, fname);
         sttFormData.append('language', 'en-US');
-        
+
         const sttResponse = await fetch(`${API_URL}/stt`, {
           method: 'POST',
           body: sttFormData,
         });
-        
+
         if (!sttResponse.ok) {
+          const errBody = await sttResponse.text();
+          console.warn('STT error:', sttResponse.status, errBody);
           throw new Error('Speech-to-text failed');
         }
-        
+
         const sttData = await sttResponse.json();
-        const userTranscript = sttData.text;
-        
-        // Step 2: Chat with Gemini (via Cloud Function)
+        const userTranscript = (sttData.text || '').trim();
+        if (!userTranscript) {
+          setVoiceUiStatus('Didn\'t catch speech — try again or speak a bit louder.', 'active');
+          return;
+        }
+
         const chatResponse = await fetch(`${API_URL}/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -775,46 +988,65 @@
             conversation_history: conversationHistory,
           }),
         });
-        
+
         if (!chatResponse.ok) {
           throw new Error('Chat request failed');
         }
-        
-        const chatData = await chatResponse.json();
-        const firstResponse = chatData.responses?.[0];
-        if (!firstResponse) {
-          throw new Error('No response from chat');
-        }
-        
-        // Step 3: TTS - convert response to audio
-        const ttsFormData = new FormData();
-        ttsFormData.append('text', firstResponse.response);
-        ttsFormData.append('terpene_id', firstResponse.terpene_id);
-        
-        const ttsResponse = await fetch(`${API_URL}/tts`, {
-          method: 'POST',
-          body: ttsFormData,
-        });
-        
-        if (!ttsResponse.ok) {
-          throw new Error('Text-to-speech failed');
-        }
-        
-        const ttsAudioBlob = await ttsResponse.blob();
-        const audioUrl = URL.createObjectURL(ttsAudioBlob);
 
-        // Add messages
+        const chatData = await chatResponse.json();
         addMessage('user', userTranscript);
-        addMessage('assistant', firstResponse.response, audioUrl, firstResponse.terpene_id);
-        
-        // Update conversation history
-        conversationHistory = chatData.conversation_history;
-        
-        document.getElementById('recordingStatus').textContent = 'Click to start recording';
+
+        let firstResponse = null;
+        if (chatData.responses && Array.isArray(chatData.responses)) {
+          chatData.responses.forEach((resp) => {
+            addMessage('assistant', resp.response, null, resp.terpene_id);
+          });
+          conversationHistory = chatData.conversation_history;
+          firstResponse = chatData.responses[0];
+        } else {
+          const assistantMessage = chatData.response || chatData.responses?.[0]?.response;
+          const terpeneId = chatData.responses?.[0]?.terpene_id || activeTerpenes[0];
+          addMessage('assistant', assistantMessage, null, terpeneId);
+          conversationHistory = chatData.conversation_history || conversationHistory;
+          firstResponse = { response: assistantMessage, terpene_id: terpeneId };
+        }
+
+        if (firstResponse && chatData.responses && chatData.responses.length === 1) {
+          try {
+            const ttsFormData = new FormData();
+            ttsFormData.append('text', firstResponse.response);
+            ttsFormData.append('terpene_id', firstResponse.terpene_id);
+            const ttsResponse = await fetch(`${API_URL}/tts`, {
+              method: 'POST',
+              body: ttsFormData,
+            });
+            if (ttsResponse.ok) {
+              const ttsAudioBlob = await ttsResponse.blob();
+              const audioUrl = URL.createObjectURL(ttsAudioBlob);
+              const messages = document.getElementById('messages');
+              const lastMessage = messages.lastElementChild;
+              if (lastMessage && lastMessage.classList.contains('assistant')) {
+                const contentDiv = lastMessage.querySelector('.message-content');
+                if (contentDiv && !contentDiv.querySelector('audio')) {
+                  const audioControls = document.createElement('div');
+                  audioControls.className = 'audio-controls';
+                  const audio = document.createElement('audio');
+                  audio.src = audioUrl;
+                  audio.controls = true;
+                  audio.style.width = '100%';
+                  audioControls.appendChild(audio);
+                  contentDiv.appendChild(audioControls);
+                }
+              }
+            }
+          } catch (ttsErr) {
+            console.warn('TTS failed:', ttsErr);
+          }
+        }
       } catch (error) {
         console.error('Error:', error);
         addMessage('assistant', `Sorry, I encountered an error: ${error.message}. Please try again.`);
-        document.getElementById('recordingStatus').textContent = 'Error. Click to try again';
+        setVoiceUiStatus('Error — speak again when ready.', 'active');
       }
     }
 
@@ -856,10 +1088,19 @@
         audioModeBtn.addEventListener('click', () => setMode('audio'));
       }
       
-      // Record button click
-      const recordButton = document.getElementById('recordButton');
-      if (recordButton) {
-        recordButton.addEventListener('click', toggleRecording);
+      const voiceToggleMic = document.getElementById('voiceToggleMic');
+      if (voiceToggleMic) {
+        voiceToggleMic.addEventListener('click', () => {
+          if (voiceStream) {
+            stopHandsFreeVoice();
+            voiceToggleMic.textContent = 'Resume microphone';
+            const st = document.getElementById('recordingStatus');
+            if (st) st.textContent = 'Microphone off. Tap Resume to speak hands-free again.';
+          } else if (currentMode === 'audio') {
+            voiceToggleMic.textContent = 'Stop microphone';
+            startHandsFreeVoice();
+          }
+        });
       }
     });
 

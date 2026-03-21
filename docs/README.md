@@ -4,7 +4,7 @@ Simple chat interface for **TerpeneQueen (Susan Trapp, PhD)** using **Google Ver
 
 ## Features
 
-- 🌿 **TerpeneQueen persona** — Expert interviewer on terpenes, cannabis botany, natural products
+- 🫅🏼 **TerpeneQueen persona** — Expert interviewer on terpenes, cannabis botany, natural products
 - 💬 **Text chat** — Type messages and get text + audio responses
 - 🎤 **Voice chat** — Record audio, get audio responses (STT → AI → TTS)
 - 🔊 **Audio playback** — Hear TerpeneQueen's responses in synthesized voice
