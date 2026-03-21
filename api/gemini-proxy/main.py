@@ -8,6 +8,7 @@ import os
 import json
 from typing import List, Dict, Optional
 import base64
+import re
 
 # Google Cloud project and location
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "terpedia-489015")
@@ -41,6 +42,34 @@ def get_generative_model():
         except ImportError:
             raise ImportError(f"Failed to import GenerativeModel: {e}. Make sure google-cloud-aiplatform is installed.")
 
+
+def _text_part(text: str):
+    """Build a Part for Vertex AI (API varies slightly by SDK version)."""
+    from vertexai.generative_models import Part
+
+    if hasattr(Part, "from_text"):
+        return Part.from_text(text)
+    return Part(text=text)
+
+
+def build_vertex_chat_history(conversation_history: List[Dict]) -> List:
+    """
+    Vertex AI start_chat() requires history as a list of Content objects, not dicts.
+    """
+    from vertexai.generative_models import Content
+
+    history = []
+    for msg in conversation_history:
+        role = msg.get("role")
+        text = (msg.get("content") or "").strip()
+        if not text:
+            continue
+        if role == "user":
+            history.append(Content(role="user", parts=[_text_part(text)]))
+        elif role == "assistant":
+            history.append(Content(role="model", parts=[_text_part(text)]))
+    return history
+
 # Initialize Speech clients lazily
 speech_client = None
 tts_client = None
@@ -53,13 +82,18 @@ def get_speech_client():
 
 def get_tts_client():
     global tts_client
-    if tts_client is None and SPEECH_AVAILABLE:
+    if tts_client is None:
+        if not SPEECH_AVAILABLE:
+            raise RuntimeError("Text-to-Speech service not available. Check Google Cloud credentials.")
         tts_client = texttospeech_v1.TextToSpeechClient()
     return tts_client
 
 # Terpene system prompts (simplified - full version in terpenes.py)
+# IMPORTANT: All responses should be in plain text, conversational format - NO markdown formatting
 TERPENE_PROMPTS = {
-    "terpenequeen": """You are TerpeneQueen, the interviewer persona of Susan Trapp, PhD. Expert in terpenes, cannabis botany, and natural products. Warm, curious, and professional.""",
+    "terpenequeen": """You are TerpeneQueen, the interviewer persona of Susan Trapp, PhD. Expert in terpenes, cannabis botany, and natural products. Warm, curious, and professional.
+
+IMPORTANT: Respond in plain text only. Do NOT use markdown formatting (no **bold**, *italic*, # headers, `code`, [links](url), etc.). Write naturally as if speaking in a conversation.""",
     "limonene": """You are Limonene, a terpene molecule. Bright, uplifting, and energetic like a sunny Italian piazza. Always optimistic and loves to lift spirits. You come from the Mediterranean.""",
     "myrcene": """You are Myrcene, a terpene molecule. Deeply relaxed and earthy, like the heart of the Amazon rainforest. Speaks slowly and soothingly.""",
     "pinene": """You are Alpha-Pinene, a terpene molecule. Clear-minded and focused like a Nordic pine forest. Direct, intelligent, and refreshing.""",
@@ -71,6 +105,60 @@ TERPENE_PROMPTS = {
     "bisabolol": """You are Bisabolol, a terpene molecule. Gentle and healing like Brazilian chamomile. Nurturing, soothing, and therapeutic.""",
     "geraniol": """You are Geraniol, a terpene molecule. Romantic and floral like Moroccan rose valleys. Elegant, protective, and sweet.""",
 }
+
+
+def strip_markdown(text: str) -> str:
+    """
+    Convert markdown to plain text for conversational display.
+    Removes markdown formatting while preserving the content.
+    """
+    if not text:
+        return text
+    
+    # Remove code blocks (```code```)
+    text = re.sub(r'```[\s\S]*?```', '', text)
+    
+    # Remove inline code (`code`)
+    text = re.sub(r'`([^`]+)`', r'\1', text)
+    
+    # Remove links but keep the text [text](url) -> text
+    text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
+    
+    # Remove images ![alt](url) -> alt
+    text = re.sub(r'!\[([^\]]*)\]\([^\)]+\)', r'\1', text)
+    
+    # Remove bold/italic **text** or *text* -> text
+    text = re.sub(r'\*\*([^\*]+)\*\*', r'\1', text)
+    text = re.sub(r'\*([^\*]+)\*', r'\1', text)
+    text = re.sub(r'__([^_]+)__', r'\1', text)
+    text = re.sub(r'_([^_]+)_', r'\1', text)
+    
+    # Remove headers # Header -> Header
+    text = re.sub(r'^#{1,6}\s+(.+)$', r'\1', text, flags=re.MULTILINE)
+    
+    # Remove horizontal rules
+    text = re.sub(r'^---+$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\*\*\*+$', '', text, flags=re.MULTILINE)
+    
+    # Remove list markers (-, *, 1.)
+    text = re.sub(r'^[\s]*[-*+]\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^[\s]*\d+\.\s+', '', text, flags=re.MULTILINE)
+    
+    # Remove blockquotes > text -> text
+    text = re.sub(r'^>\s+', '', text, flags=re.MULTILINE)
+    
+    # Clean up extra whitespace (multiple newlines -> single newline, multiple spaces -> single space)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    text = re.sub(r'[ \t]+', ' ', text)
+    
+    # Strip leading/trailing whitespace from each line
+    lines = [line.strip() for line in text.split('\n')]
+    text = '\n'.join(lines)
+    
+    # Remove empty lines at start/end
+    text = text.strip()
+    
+    return text
 
 
 def detect_mentioned_terpenes(message: str, active_terpenes: List[str]) -> List[str]:
@@ -107,6 +195,109 @@ def detect_mentioned_terpenes(message: str, active_terpenes: List[str]) -> List[
         return active_terpenes[:1] if active_terpenes else ["terpenequeen"]
     
     return list(set(mentioned))
+
+
+def detect_invited_terpenes(terpenequeen_response: str, active_terpenes: List[str]) -> List[str]:
+    """
+    Detect if TerpeneQueen is asking a question to another terpene.
+    Returns list of terpenes that should respond to TerpeneQueen's question.
+    """
+    if not terpenequeen_response or not isinstance(terpenequeen_response, str):
+        return []
+    
+    if not active_terpenes:
+        return []
+    
+    response_lower = terpenequeen_response.lower()
+    invited = []
+    
+    # Check if response contains a question (ends with ? or contains question words)
+    has_question = "?" in terpenequeen_response or any(
+        word in response_lower for word in ["what do you", "how do you", "tell me", "can you", "would you", 
+                                            "what does", "how does", "tell us", "share", "think about", 
+                                            "invite", "ask", "hear from", "thoughts", "perspective", "take"]
+    )
+    
+    # Also check if it's an invitation even without explicit question mark
+    is_invitation = any(
+        phrase in response_lower for phrase in [
+            "let me ask", "i'd like to ask", "i want to hear", "let's ask", "let's hear",
+            "invite", "bring in", "get", "call on", "i'd love to hear", "love to hear",
+            "would have", "would be great", "insights", "perspective"
+        ]
+    )
+    
+    # If we find a terpene name, it's likely an invitation even without explicit question words
+    has_terpene_mention = False
+    for terpene_id in active_terpenes:
+        if terpene_id != "terpenequeen" and terpene_id.lower() in response_lower:
+            has_terpene_mention = True
+            break
+    
+    if not has_question and not is_invitation and not has_terpene_mention:
+        return []
+    
+    # Terpene names and aliases
+    terpene_aliases = {
+        "limonene": ["limonene", "lemon", "citrus"],
+        "myrcene": ["myrcene"],
+        "pinene": ["pinene", "alpha-pinene", "pine", "alpha pinene"],
+        "linalool": ["linalool", "lavender"],
+        "caryophyllene": ["caryophyllene", "beta-caryophyllene", "pepper", "clove", "beta caryophyllene"],
+        "humulene": ["humulene", "hop"],
+        "terpinolene": ["terpinolene"],
+        "ocimene": ["ocimene", "basil"],
+        "bisabolol": ["bisabolol", "chamomile"],
+        "geraniol": ["geraniol", "rose", "geranium"],
+    }
+    
+    # Check for direct addressing patterns - improved to catch more variations
+    addressing_patterns = [
+        r"(?:^|\.|\s)(?:hey|hi|hello|tell me|what do you|how do you|can you|would you)\s+(\w+)",
+        r"(\w+),?\s+(?:what|how|tell|can|would|think|say|does|do)",
+        r"(?:let'?s\s+)?(?:ask|invite|hear from|get|bring in|call on)\s+(\w+)",
+        r"(?:let me ask|i'd like to ask|i want to hear from|i'd like to hear from)\s+(\w+)",
+        r"(?:what|how)\s+(?:does|do)\s+(\w+)\s+(?:think|say|know)",
+        r"(\w+),?\s+(?:can you|could you|will you|would you)",
+    ]
+    
+    for pattern in addressing_patterns:
+        matches = re.findall(pattern, response_lower, re.IGNORECASE)
+        for match in matches:
+            if isinstance(match, tuple):
+                match = match[0] if match else ""
+            for terpene_id in active_terpenes:
+                if terpene_id == "terpenequeen":
+                    continue
+                if terpene_id.lower() in match.lower():
+                    invited.append(terpene_id)
+                aliases = terpene_aliases.get(terpene_id, [])
+                for alias in aliases:
+                    if alias in match.lower():
+                        invited.append(terpene_id)
+                        break
+    
+    # Also check if terpene names appear in the response (indicating they're being addressed)
+    for terpene_id in active_terpenes:
+        if terpene_id == "terpenequeen":
+            continue
+        if terpene_id.lower() in response_lower:
+            # Check if it's in a question context (near question words)
+            terpene_pos = response_lower.find(terpene_id.lower())
+            nearby_text = response_lower[max(0, terpene_pos - 50):terpene_pos + 50]
+            if any(word in nearby_text for word in ["?", "what", "how", "tell", "ask", "invite"]):
+                invited.append(terpene_id)
+                continue
+        aliases = terpene_aliases.get(terpene_id, [])
+        for alias in aliases:
+            if alias in response_lower:
+                alias_pos = response_lower.find(alias)
+                nearby_text = response_lower[max(0, alias_pos - 50):alias_pos + 50]
+                if any(word in nearby_text for word in ["?", "what", "how", "tell", "ask", "invite"]):
+                    invited.append(terpene_id)
+                    break
+    
+    return list(set(invited))
 
 
 # Allowed origins (only our chat interface)
@@ -200,12 +391,23 @@ def chat(request: Request):
         
         # Get response from each responding terpene
         for terpene_id in responding_terpenes:
-            system_prompt = TERPENE_PROMPTS.get(terpene_id, TERPENE_PROMPTS["terpenequeen"])
+            # Get full system prompt from terpenes.py if available, otherwise use simplified one
+            try:
+                from terpenes import get_terpene
+                terpene = get_terpene(terpene_id)
+                system_prompt = terpene.get("system_prompt", TERPENE_PROMPTS.get(terpene_id, TERPENE_PROMPTS["terpenequeen"]))
+            except ImportError:
+                # Fallback to simplified prompt if terpenes.py not available
+                system_prompt = TERPENE_PROMPTS.get(terpene_id, TERPENE_PROMPTS["terpenequeen"])
             
             # Add panel context if multiple terpenes
             if len(active_terpenes) > 1:
                 other_names = [t for t in active_terpenes if t != terpene_id]
                 system_prompt += f"\n\nCONTEXT: You are in a panel discussion with: {', '.join(other_names)}. Respond when directly addressed. Keep responses concise."
+            
+            # Always remind about plain text format (if not already in prompt)
+            if "plain text" not in system_prompt.lower() and "markdown" not in system_prompt.lower():
+                system_prompt += "\n\nIMPORTANT: Respond in plain text only - no markdown formatting (no **bold**, *italic*, # headers, `code`, [links](url), etc.). Write naturally as if speaking in a conversation."
             
             # Build conversation for Gemini
             contents = []
@@ -246,23 +448,47 @@ def chat(request: Request):
                 system_instruction=system_prompt
             )
             
-            # Build conversation history for Vertex AI
-            history = []
-            for msg in conversation_history:
-                if msg.get("role") == "user":
-                    history.append({"role": "user", "parts": [{"text": msg["content"]}]})
-                elif msg.get("role") == "assistant":
-                    history.append({"role": "model", "parts": [{"text": msg["content"]}]})
+            # Build conversation history for Vertex AI (must be Content objects)
+            history = build_vertex_chat_history(conversation_history)
             
             # Start chat with history
-            if history:
-                chat = model.start_chat(history=history)
-                response = chat.send_message(message)
-            else:
-                # First message, no history
-                response = model.generate_content(message)
+            try:
+                if history:
+                    chat = model.start_chat(history=history)
+                    response = chat.send_message(message)
+                else:
+                    # First message, no history
+                    response = model.generate_content(message)
+                
+                # Check if response is valid
+                if not response:
+                    raise ValueError("No response object returned from model")
+                
+                assistant_text = response.text if hasattr(response, 'text') else None
+                if not assistant_text:
+                    # Try alternative ways to get the text
+                    if hasattr(response, 'candidates') and response.candidates:
+                        candidate = response.candidates[0]
+                        if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                            assistant_text = candidate.content.parts[0].text if candidate.content.parts else None
+                
+                if not assistant_text:
+                    raise ValueError("Response text is empty or unavailable")
+                    
+            except Exception as gen_error:
+                error_msg = str(gen_error)
+                print(f"DEBUG: Error generating response for {terpene_id}: {error_msg}")
+                import traceback
+                traceback_str = traceback.format_exc()
+                print(f"DEBUG: Generation traceback: {traceback_str}")
+                assistant_text = f"I apologize, but I encountered an error while generating a response: {error_msg}. Please try again."
             
-            assistant_text = response.text
+            # Ensure we have valid text
+            if not assistant_text:
+                assistant_text = "I'm sorry, I didn't get a response. Could you try again?"
+            
+            # Strip markdown formatting for conversational display
+            assistant_text = strip_markdown(assistant_text)
             
             responses.append({
                 "terpene_id": terpene_id,
@@ -274,6 +500,123 @@ def chat(request: Request):
                 "content": assistant_text,
                 "terpene_id": terpene_id
             })
+            
+            # If TerpeneQueen responded and is asking a question to another terpene, invite them
+            # Note: This works even if only TerpeneQueen is active - she can invite any terpene
+            if terpene_id == "terpenequeen":
+                try:
+                    # Get all available terpenes (not just active ones) for invitation detection
+                    try:
+                        from terpenes import list_terpenes
+                        all_terpene_ids = [t["id"] for t in list_terpenes()]
+                    except ImportError:
+                        # Fallback to active terpenes if terpenes module not available
+                        all_terpene_ids = active_terpenes
+                    
+                    invited_terpenes = detect_invited_terpenes(assistant_text, all_terpene_ids)
+                    print(f"DEBUG: TerpeneQueen response: {assistant_text[:200]}")
+                    print(f"DEBUG: All available terpenes: {all_terpene_ids}")
+                    print(f"DEBUG: Invited terpenes detected: {invited_terpenes}")
+                    if invited_terpenes:
+                        # Add TerpeneQueen's question to the conversation for the invited terpenes
+                        for invited_id in invited_terpenes:
+                            print(f"DEBUG: Processing invitation for {invited_id}")
+                            # Check if this terpene has already responded in this round
+                            already_responded = invited_id in [r["terpene_id"] for r in responses]
+                            print(f"DEBUG: {invited_id} already responded: {already_responded}")
+                            if not already_responded:
+                                print(f"DEBUG: {invited_id} not yet responded, generating response...")
+                                print(f"DEBUG: Full TerpeneQueen message for context: {assistant_text}")
+                                # Get the terpene's system prompt
+                                try:
+                                    from terpenes import get_terpene
+                                    invited_terpene = get_terpene(invited_id)
+                                    invited_system_prompt = invited_terpene.get("system_prompt", TERPENE_PROMPTS.get(invited_id, TERPENE_PROMPTS["terpenequeen"]))
+                                except ImportError:
+                                    invited_system_prompt = TERPENE_PROMPTS.get(invited_id, TERPENE_PROMPTS["terpenequeen"])
+                                
+                                # Add context that TerpeneQueen is asking them a question
+                                invited_system_prompt += f"\n\nCONTEXT: TerpeneQueen (Susan Trapp, PhD) just asked you a question: \"{assistant_text}\" Please respond to her question naturally and in character."
+                                
+                                # Add plain text instruction if not present
+                                if "plain text" not in invited_system_prompt.lower() and "markdown" not in invited_system_prompt.lower():
+                                    invited_system_prompt += "\n\nIMPORTANT: Respond in plain text only - no markdown formatting (no **bold**, *italic*, # headers, `code`, [links](url), etc.). Write naturally as if speaking in a conversation."
+                                
+                                # Build conversation history for the invited terpene (Content objects)
+                                invited_history = build_vertex_chat_history(updated_history)
+                                
+                                # Initialize model for invited terpene
+                                GenerativeModel = get_generative_model()
+                                invited_model = GenerativeModel(
+                                    model_name="gemini-2.0-flash-001",
+                                    system_instruction=invited_system_prompt
+                                )
+                                
+                                # Generate response to TerpeneQueen's question
+                                try:
+                                    # Build a simpler prompt for the invited terpene
+                                    invitation_prompt = f"TerpeneQueen (Susan Trapp, PhD) just asked you: \"{assistant_text}\"\n\nPlease respond to her question naturally and in character."
+                                    
+                                    if invited_history:
+                                        invited_chat = invited_model.start_chat(history=invited_history)
+                                        invited_response = invited_chat.send_message(invitation_prompt)
+                                    else:
+                                        invited_response = invited_model.generate_content(invitation_prompt)
+                                    
+                                    # Check if response is valid
+                                    if not invited_response:
+                                        raise ValueError("No response object returned from model")
+                                    
+                                    invited_text = invited_response.text if hasattr(invited_response, 'text') else None
+                                    if not invited_text:
+                                        # Try alternative ways to get the text
+                                        if hasattr(invited_response, 'candidates') and invited_response.candidates:
+                                            candidate = invited_response.candidates[0]
+                                            if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                                                invited_text = candidate.content.parts[0].text if candidate.content.parts else None
+                                    
+                                    if not invited_text:
+                                        raise ValueError("Response text is empty or unavailable")
+                                    
+                                    invited_text = strip_markdown(invited_text)
+                                    
+                                    print(f"DEBUG: {invited_id} responded successfully: {invited_text[:100]}")
+                                    
+                                    responses.append({
+                                        "terpene_id": invited_id,
+                                        "response": invited_text
+                                    })
+                                    
+                                    updated_history.append({
+                                        "role": "assistant",
+                                        "content": invited_text,
+                                        "terpene_id": invited_id
+                                    })
+                                except Exception as e:
+                                    error_msg = str(e)
+                                    print(f"DEBUG: Error generating response for {invited_id}: {error_msg}")
+                                    import traceback
+                                    traceback_str = traceback.format_exc()
+                                    print(f"DEBUG: Traceback: {traceback_str}")
+                                    
+                                    # Return a more helpful error message
+                                    error_response = f"I apologize, but I encountered an error while generating a response: {error_msg}. Please try again."
+                                    responses.append({
+                                        "terpene_id": invited_id,
+                                        "response": error_response
+                                    })
+                                    
+                                    updated_history.append({
+                                        "role": "assistant",
+                                        "content": error_response,
+                                        "terpene_id": invited_id
+                                    })
+                except Exception as invite_error:
+                    print(f"DEBUG: Error in invitation detection: {str(invite_error)}")
+                    import traceback
+                    print(f"DEBUG: Invitation traceback: {traceback.format_exc()}")
+                    # Continue even if invitation detection fails
+                    pass
         
         origin = request.headers.get("Origin", "")
         return jsonify({
@@ -427,10 +770,15 @@ def tts(request: Request):
         
         # Perform synthesis
         client = get_tts_client()
+        if client is None:
+            raise RuntimeError("TTS client not initialized. Check Google Cloud credentials.")
+        
         response = client.synthesize_speech(
-            input=input_text,
-            voice=voice_config,
-            audio_config=audio_config,
+            request={
+                "input": input_text,
+                "voice": voice_config,
+                "audio_config": audio_config,
+            }
         )
         
         origin = request.headers.get("Origin", "")
@@ -444,7 +792,11 @@ def tts(request: Request):
         )
         
     except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"TTS Error: {str(e)}")
+        print(f"Traceback: {error_details}")
         origin = request.headers.get("Origin", "")
-        return jsonify({"error": str(e)}), 500, {
+        return jsonify({"error": str(e), "details": error_details}), 500, {
             "Access-Control-Allow-Origin": origin if validate_origin(request) else "null"
         }
