@@ -331,26 +331,14 @@ async def speech_to_text(
     try:
         # Read audio file
         audio_content = await file.read()
-        
-        # Detect encoding from file extension
-        file_ext = file.filename.split(".")[-1].lower() if file.filename else "webm"
-        encoding_map = {
-            "webm": speech_v1.RecognitionConfig.AudioEncoding.WEBM_OPUS,
-            "mp3": speech_v1.RecognitionConfig.AudioEncoding.MP3,
-            "wav": speech_v1.RecognitionConfig.AudioEncoding.LINEAR16,
-            "flac": speech_v1.RecognitionConfig.AudioEncoding.FLAC,
-        }
-        encoding = encoding_map.get(file_ext, speech_v1.RecognitionConfig.AudioEncoding.WEBM_OPUS)
-        
-        # Configure recognition
-        config = speech_v1.RecognitionConfig(
-            encoding=encoding,
-            sample_rate_hertz=48000,
-            language_code=language,
-            enable_automatic_punctuation=True,
-            model="latest_long",
+        fname = file.filename or "recording.webm"
+
+        from stt_helpers import prepare_audio_and_config
+
+        audio_content, config = prepare_audio_and_config(
+            audio_content, fname, language or "en-US"
         )
-        
+
         audio = speech_v1.RecognitionAudio(content=audio_content)
         
         # Perform transcription

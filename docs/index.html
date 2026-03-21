@@ -870,9 +870,17 @@
       }
     }
 
+    function filenameForStt(blob) {
+      const t = (blob.type || '').toLowerCase();
+      if (t.includes('webm')) return 'recording.webm';
+      if (t.includes('mp4') || t.includes('m4a') || t.includes('aac')) return 'recording.m4a';
+      if (t.includes('mpeg') || t.includes('mp3')) return 'recording.mp3';
+      if (t.includes('wav')) return 'recording.wav';
+      return 'recording.webm';
+    }
+
     async function sendAudioMessage(recordingBlob) {
-      const ext = (recordingBlob.type && recordingBlob.type.includes('mp4')) ? 'm4a' : 'webm';
-      const fname = `recording.${ext}`;
+      const fname = filenameForStt(recordingBlob);
 
       try {
         if (!API_URL) {

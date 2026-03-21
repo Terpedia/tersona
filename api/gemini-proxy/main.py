@@ -324,10 +324,15 @@ def detect_mentioned_terpenes(
     return list(set(mentioned))
 
 
-def detect_invited_terpenes(terpenequeen_response: str, active_terpenes: List[str]) -> List[str]:
+def detect_invited_terpenes(
+    terpenequeen_response: str,
+    active_terpenes: List[str],
+    panel_terpene_ids: Optional[List[str]] = None,
+) -> List[str]:
     """
     Detect if TerpeneQueen is asking a question to another terpene.
-    Returns list of terpenes that should respond to TerpeneQueen's question.
+    Returns list of terpene IDs that should respond to TerpeneQueen's question.
+    panel_terpene_ids: optional UI panel roster — only these guests may be invited.
     """
     if not terpenequeen_response or not isinstance(terpenequeen_response, str):
         return []
@@ -340,9 +345,27 @@ def detect_invited_terpenes(terpenequeen_response: str, active_terpenes: List[st
     
     # Check if response contains a question (ends with ? or contains question words)
     has_question = "?" in terpenequeen_response or any(
-        word in response_lower for word in ["what do you", "how do you", "tell me", "can you", "would you", 
-                                            "what does", "how does", "tell us", "share", "think about", 
-                                            "invite", "ask", "hear from", "thoughts", "perspective", "take"]
+        word in response_lower
+        for word in [
+            "what do you",
+            "how do you",
+            "tell me",
+            "can you",
+            "would you",
+            "what does",
+            "how does",
+            "tell us",
+            "share",
+            "think about",
+            "invite",
+            "ask",
+            "hear from",
+            "thoughts",
+            "perspective",
+            "take",
+            "are you",
+            "could you",
+        ]
     )
     
     # Also check if it's an invitation even without explicit question mark
@@ -369,7 +392,7 @@ def detect_invited_terpenes(terpenequeen_response: str, active_terpenes: List[st
         "limonene": ["limonene", "lemon", "citrus"],
         "myrcene": ["myrcene"],
         "pinene": ["pinene", "alpha-pinene", "pine", "alpha pinene"],
-        "linalool": ["linalool", "lavender"],
+        "linalool": ["linalool", "lavender", "linallok", "linalol"],
         "caryophyllene": ["caryophyllene", "beta-caryophyllene", "pepper", "clove", "beta caryophyllene"],
         "humulene": ["humulene", "hop"],
         "terpinolene": ["terpinolene"],
@@ -404,27 +427,67 @@ def detect_invited_terpenes(terpenequeen_response: str, active_terpenes: List[st
                         invited.append(terpene_id)
                         break
     
-    # Also check if terpene names appear in the response (indicating they're being addressed)
+    # Strong signal: "Name," direct address (e.g. "Linalool, are you also here?")
+    allow_ids = [t for t in active_terpenes if t and t.lower() != "terpenequeen"]
+    for terpene_id in allow_ids:
+        for token in [terpene_id.lower(), *terpene_aliases.get(terpene_id, [])]:
+            if len(token) < 3:
+                continue
+            if re.search(rf"(?:^|[\s\.\!\*]){re.escape(token)}\s*,", response_lower):
+                invited.append(terpene_id)
+                break
+
+    # Terpene names / aliases with question context (wide window — host may thank Myrcene
+    # in the same message before asking Linalool; a 50-char window often missed the "?")
+    question_cues = ("?", "what", "how", "tell", "ask", "invite", "are you", "can you", "could you")
     for terpene_id in active_terpenes:
         if terpene_id == "terpenequeen":
             continue
         if terpene_id.lower() in response_lower:
-            # Check if it's in a question context (near question words)
             terpene_pos = response_lower.find(terpene_id.lower())
-            nearby_text = response_lower[max(0, terpene_pos - 50):terpene_pos + 50]
-            if any(word in nearby_text for word in ["?", "what", "how", "tell", "ask", "invite"]):
+            rest_after = response_lower[terpene_pos:]
+            nearby_text = response_lower[max(0, terpene_pos - 80) : terpene_pos + 220]
+            if any(word in nearby_text for word in question_cues) or "?" in rest_after:
                 invited.append(terpene_id)
                 continue
         aliases = terpene_aliases.get(terpene_id, [])
         for alias in aliases:
-            if alias in response_lower:
-                alias_pos = response_lower.find(alias)
-                nearby_text = response_lower[max(0, alias_pos - 50):alias_pos + 50]
-                if any(word in nearby_text for word in ["?", "what", "how", "tell", "ask", "invite"]):
-                    invited.append(terpene_id)
-                    break
-    
-    return list(set(invited))
+            if len(alias) < 3 or alias not in response_lower:
+                continue
+            alias_pos = response_lower.find(alias)
+            rest_after = response_lower[alias_pos:]
+            nearby_text = response_lower[max(0, alias_pos - 80) : alias_pos + 220]
+            if any(word in nearby_text for word in question_cues) or "?" in rest_after:
+                invited.append(terpene_id)
+                break
+
+    # De-dupe; preserve order of first mention (stable invite generation)
+    seen = set()
+    ordered: List[str] = []
+
+    def _first_mention_pos(tid: str) -> int:
+        p = response_lower.find(tid.lower())
+        if p >= 0:
+            return p
+        for a in terpene_aliases.get(tid, []):
+            if len(a) >= 3:
+                ap = response_lower.find(a)
+                if ap >= 0:
+                    return ap
+        return 10**9
+
+    for tid in sorted(set(invited), key=_first_mention_pos):
+        if tid == "terpenequeen":
+            continue
+        if tid not in seen:
+            seen.add(tid)
+            ordered.append(tid)
+
+    if panel_terpene_ids:
+        allow = {t for t in panel_terpene_ids if t and t.lower() != "terpenequeen"}
+        ordered = [tid for tid in ordered if tid in allow]
+
+    return ordered
 
 
 # Allowed origins (only our chat interface)
@@ -653,7 +716,9 @@ def chat(request: Request):
                         # Fallback to active terpenes if terpenes module not available
                         all_terpene_ids = active_terpenes
                     
-                    invited_terpenes = detect_invited_terpenes(assistant_text, all_terpene_ids)
+                    invited_terpenes = detect_invited_terpenes(
+                        assistant_text, all_terpene_ids, panel_terpene_ids=active_terpenes
+                    )
                     print(f"DEBUG: TerpeneQueen response: {assistant_text[:200]}")
                     print(f"DEBUG: All available terpenes: {all_terpene_ids}")
                     print(f"DEBUG: Invited terpenes detected: {invited_terpenes}")
@@ -811,26 +876,12 @@ def stt(request: Request):
         audio_file = flask_request.files['file']
         audio_content = audio_file.read()
         language = flask_request.form.get('language', 'en-US')
-        
-        # Detect encoding from file extension
-        file_ext = audio_file.filename.split(".")[-1].lower() if audio_file.filename else "webm"
-        encoding_map = {
-            "webm": speech_v1.RecognitionConfig.AudioEncoding.WEBM_OPUS,
-            "mp3": speech_v1.RecognitionConfig.AudioEncoding.MP3,
-            "wav": speech_v1.RecognitionConfig.AudioEncoding.LINEAR16,
-            "flac": speech_v1.RecognitionConfig.AudioEncoding.FLAC,
-        }
-        encoding = encoding_map.get(file_ext, speech_v1.RecognitionConfig.AudioEncoding.WEBM_OPUS)
-        
-        # Configure recognition
-        config = speech_v1.RecognitionConfig(
-            encoding=encoding,
-            sample_rate_hertz=48000,
-            language_code=language,
-            enable_automatic_punctuation=True,
-            model="latest_long",
-        )
-        
+        fname = audio_file.filename or "recording.webm"
+
+        from stt_helpers import prepare_audio_and_config
+
+        audio_content, config = prepare_audio_and_config(audio_content, fname, language)
+
         audio = speech_v1.RecognitionAudio(content=audio_content)
         
         # Perform transcription
