@@ -742,7 +742,7 @@
       }
     }
 
-    async function sendAudioMessage(audioBlob) {
+    async function sendAudioMessage(recordingBlob) {
       try {
         if (!API_URL) {
           throw new Error('API URL not configured. Please enter your Cloud Function URL.');
@@ -750,7 +750,7 @@
         
         // Step 1: STT - convert audio to text
         const sttFormData = new FormData();
-        sttFormData.append('file', audioBlob, 'recording.webm');
+        sttFormData.append('file', recordingBlob, 'recording.webm');
         sttFormData.append('language', 'en-US');
         
         const sttResponse = await fetch(`${API_URL}/stt`, {
@@ -800,8 +800,8 @@
           throw new Error('Text-to-speech failed');
         }
         
-        const audioBlob = await ttsResponse.blob();
-        const audioUrl = URL.createObjectURL(audioBlob);
+        const ttsAudioBlob = await ttsResponse.blob();
+        const audioUrl = URL.createObjectURL(ttsAudioBlob);
 
         // Add messages
         addMessage('user', userTranscript);
