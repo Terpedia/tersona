@@ -398,35 +398,6 @@
     }
 
 
-    .terpene-selector {
-      margin-top: 1rem;
-    }
-
-    .terpene-button {
-      padding: 0.5rem 1rem;
-      border: 2px solid #e0e0e0;
-      background: white;
-      border-radius: 8px;
-      cursor: pointer;
-      font-size: 0.9rem;
-      transition: all 0.2s;
-      display: flex;
-      align-items: center;
-      gap: 0.5rem;
-    }
-
-    .terpene-button:hover {
-      border-color: #667eea;
-      transform: translateY(-2px);
-    }
-
-    .terpene-button.active {
-      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-      color: white;
-      border-color: #667eea;
-    }
-
-
     @media (max-width: 768px) {
       .chat-container {
         margin: 1rem;
@@ -446,10 +417,7 @@
 <body>
   <div class="header">
     <h1 id="headerTitle">🫅🏼 TerpeneQueen — Susan Trapp, PhD</h1>
-    <p>Chat with terpenes! Each has a distinct personality and voice. Select multiple terpenes for a panel discussion. Terpenes respond when you mention them by name.</p>
-    <div class="terpene-selector" id="terpeneSelector" style="margin-top: 1rem; display: flex; flex-wrap: wrap; gap: 0.5rem; justify-content: center;">
-      <!-- Terpenes will be loaded here -->
-    </div>
+    <p id="headerSubtitle">All terpenes are in this chat—each has a distinct personality and voice. Mention someone by name, or ask the panel.</p>
   </div>
 
   <div class="chat-container" id="chatContainer" style="display: flex;">
@@ -508,16 +476,18 @@
     let vadSilenceAt = 0;
     let utteranceRecorderStartedAt = 0;
     let maxRecordingTimer = null;
-    let activeTerpenes = ['terpenequeen']; // Multiple terpenes can be active
+    let activeTerpenes = []; // Filled to all terpenes on load
     let terpenes = [];
+
+    function syncActiveTerpenesToAll() {
+      activeTerpenes = terpenes.length ? terpenes.map((t) => t.id) : [];
+    }
 
     async function loadApiUrl() {
       API_URL = localStorage.getItem('api_url') || DEFAULT_API_URL;
       
       // Show chat interface directly (API URL is set by default)
       await loadTerpenes();
-      activeTerpenes = ['terpenequeen'];
-      renderTerpeneSelector();
       updateHeader();
       // Show greeting from first terpene
       const firstTerpene = terpenes.find(t => t.id === 'terpenequeen');
@@ -541,63 +511,14 @@
         { id: 'bisabolol', name: 'Bisabolol', emoji: '🌼', greeting: "Oi! I'm Bisabolol, the healing spirit of Brazilian chamomile. How can I help you heal today?" },
         { id: 'geraniol', name: 'Geraniol', emoji: '🌹', greeting: "Marhaba! I'm Geraniol from the rose gardens of Morocco. Let me share the essence of roses with you." },
       ];
-      renderTerpeneSelector();
-    }
-
-    function renderTerpeneSelector() {
-      const selector = document.getElementById('terpeneSelector');
-      selector.innerHTML = '';
-      terpenes.forEach(terpene => {
-        const button = document.createElement('button');
-        button.className = 'terpene-button';
-        button.innerHTML = `${terpene.emoji} ${terpene.name}`;
-        button.onclick = () => toggleTerpene(terpene.id);
-        if (activeTerpenes.includes(terpene.id)) {
-          button.classList.add('active');
-        }
-        selector.appendChild(button);
-      });
-    }
-
-    function toggleTerpene(terpeneId) {
-      const index = activeTerpenes.indexOf(terpeneId);
-      if (index > -1) {
-        // Remove if already active (but keep at least one)
-        if (activeTerpenes.length > 1) {
-          activeTerpenes.splice(index, 1);
-        }
-      } else {
-        // Add if not active
-        activeTerpenes.push(terpeneId);
-      }
-      renderTerpeneSelector();
-      updateHeader();
+      syncActiveTerpenesToAll();
     }
 
     function updateHeader() {
-      const headerTitle = document.getElementById('headerTitle');
-      if (activeTerpenes.length === 1) {
-        const terpene = terpenes.find(t => t.id === activeTerpenes[0]);
-        if (terpene) {
-          headerTitle.textContent = `${terpene.emoji} ${terpene.name}`;
-        }
-      } else {
-        const terpeneNames = activeTerpenes.map(id => {
-          const t = terpenes.find(terp => terp.id === id);
-          return t ? `${t.emoji} ${t.name}` : id;
-        }).join(', ');
-        headerTitle.textContent = `Panel: ${terpeneNames}`;
-      }
-      
-      // Update placeholder
       const messageInput = document.getElementById('messageInput');
       if (messageInput) {
-        if (activeTerpenes.length === 1) {
-          const terpene = terpenes.find(t => t.id === activeTerpenes[0]);
-          messageInput.placeholder = `Ask ${terpene?.name || 'the terpene'} about terpenes, cannabis, or natural products...`;
-        } else {
-          messageInput.placeholder = `Ask the panel (or mention a terpene by name)...`;
-        }
+        messageInput.placeholder =
+          'Ask the full panel, or mention a terpene by name (terpenes, cannabis, natural products…)…';
       }
     }
 
@@ -697,10 +618,11 @@
         let assistantMessage = null;
         let firstResponse = null;
         
-        if (data.responses && Array.isArray(data.responses)) {
-          // Multiple terpenes responded
+        if (data.responses && Array.isArray(data.responses) && data.responses.length > 0) {
+          // Multiple terpenes responded (one bubble per { terpene_id, response })
           data.responses.forEach(resp => {
-            addMessage('assistant', resp.response, null, resp.terpene_id);
+            const tid = resp.terpene_id || resp.terpeneId;
+            addMessage('assistant', resp.response, null, tid);
           });
           conversationHistory = data.conversation_history;
           firstResponse = data.responses[0];
@@ -997,9 +919,10 @@
         addMessage('user', userTranscript);
 
         let firstResponse = null;
-        if (chatData.responses && Array.isArray(chatData.responses)) {
+        if (chatData.responses && Array.isArray(chatData.responses) && chatData.responses.length > 0) {
           chatData.responses.forEach((resp) => {
-            addMessage('assistant', resp.response, null, resp.terpene_id);
+            const tid = resp.terpene_id || resp.terpeneId;
+            addMessage('assistant', resp.response, null, tid);
           });
           conversationHistory = chatData.conversation_history;
           firstResponse = chatData.responses[0];

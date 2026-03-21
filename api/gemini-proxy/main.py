@@ -91,7 +91,7 @@ def get_tts_client():
 # Terpene system prompts (simplified - full version in terpenes.py)
 # IMPORTANT: All responses should be in plain text, conversational format - NO markdown formatting
 TERPENE_PROMPTS = {
-    "terpenequeen": """You are TerpeneQueen, the interviewer persona of Susan Trapp, PhD. Expert in terpenes, cannabis botany, and natural products. Warm, curious, and professional.
+    "terpenequeen": """You are TerpeneQueen, the interviewer persona of Susan Trapp, PhD. Expert in terpenes, cannabis botany, and natural products. Warm, curious, and professional. When guest terpenes are on the panel, do not give detailed science on their behalf—invite them by name to answer; explain mechanisms in depth only when you are the sole speaker.
 
 IMPORTANT: Respond in plain text only. Do NOT use markdown formatting (no **bold**, *italic*, # headers, `code`, [links](url), etc.). Write naturally as if speaking in a conversation.""",
     "limonene": """You are Limonene, a terpene molecule. Bright, uplifting, and energetic like a sunny Italian piazza. Always optimistic and loves to lift spirits. You come from the Mediterranean.""",
@@ -161,12 +161,104 @@ def strip_markdown(text: str) -> str:
     return text
 
 
-def detect_mentioned_terpenes(message: str, active_terpenes: List[str]) -> List[str]:
-    """Detect which terpenes are mentioned in the message"""
+def strip_fantasized_guest_dialogue_from_host(text: str) -> str:
+    """
+    Models sometimes write a full multi-speaker 'script' in TerpeneQueen's single turn.
+    Keep only the host portion so the client shows one bubble for the host; invited
+    terpenes are generated in separate API responses with correct terpene_id.
+    """
+    if not text or len(text) < 80:
+        return text
+    cut_patterns = [
+        r"\n\s*\n(?:\*\*)?Greetings,\s*TerpeneQueen",
+        r"\n\s*\nGreetings,\s*TerpeneQueen",
+        r"\n\s*\nNamaste,\s*TerpeneQueen",
+        r"\n\s*\nNamaste",
+        r"\n\s*\nAh,\s*yes,\s*I know what\s+(?:Alpha-Pinene|Alpha\-Pinene|Pinene|Limonene|Linalool)",
+        r"\n\s*\nWhile I(?:'|')m usually buzzing",
+        r"\n\s*\n(?:\*\*)?(?:Ah, yes|Oh, yes),\s*I know what",
+        r"\n\s*\nCiao\b",
+        r"\n\s*\nBonjour\b",
+    ]
+    earliest = None
+    for pat in cut_patterns:
+        m = re.search(pat, text, re.IGNORECASE | re.MULTILINE)
+        if m and m.start() > 60:
+            if earliest is None or m.start() < earliest:
+                earliest = m.start()
+    if earliest is not None:
+        return text[:earliest].strip()
+    return text
+
+
+def _panel_guests(active_terpenes: List[str]) -> List[str]:
+    return [t for t in active_terpenes if t and t.lower() != "terpenequeen"]
+
+
+def _last_assistant_terpene_id(conversation_history: List[Dict]) -> Optional[str]:
+    for msg in reversed(conversation_history or []):
+        if msg.get("role") == "assistant":
+            tid = msg.get("terpene_id")
+            if tid:
+                return tid
+    return None
+
+
+def _topic_match_guest(message_lower: str, guests: List[str]) -> Optional[str]:
+    """Route general user messages to a guest when keywords match their expertise."""
+    if not guests:
+        return None
+    topic_keywords = {
+        "linalool": ["lavender", "linalool", "floral", "sleep", "relax", "calm", "insomnia", "bath", "soothing", "sedative", "tranquil"],
+        "limonene": ["limonene", "lemon", "citrus", "zest", "bright", "uplift", "energy", "mood", "orange"],
+        "myrcene": ["myrcene", "muscle", "couch", "earthy", "mango"],
+        "pinene": ["pinene", "pine", "forest", "focus", "alert", "memory", "clear"],
+        "caryophyllene": ["caryophyllene", "pepper", "clove", "spicy", "stress"],
+        "humulene": ["humulene", "hop", "beer", "appetite"],
+        "terpinolene": ["terpinolene", "herbal", "mysterious"],
+        "ocimene": ["ocimene", "basil", "sweet"],
+        "bisabolol": ["bisabolol", "chamomile", "skin"],
+        "geraniol": ["geraniol", "rose", "geranium"],
+    }
+    for tid in guests:
+        for kw in topic_keywords.get(tid, []):
+            if kw in message_lower:
+                return tid
+    try:
+        from terpenes import get_terpene
+        for tid in guests:
+            name = get_terpene(tid)["name"].lower()
+            if len(name) > 3 and name in message_lower:
+                return tid
+    except Exception:
+        pass
+    return None
+
+
+def _pick_guest_round_robin(active_terpenes: List[str], conversation_history: List[Dict]) -> Optional[str]:
+    guests = _panel_guests(active_terpenes)
+    if not guests:
+        return None
+    n = sum(1 for m in (conversation_history or []) if m.get("role") == "user")
+    return guests[n % len(guests)]
+
+
+def detect_mentioned_terpenes(
+    message: str,
+    active_terpenes: List[str],
+    conversation_history: Optional[List[Dict]] = None,
+) -> List[str]:
+    """
+    Detect which terpenes are mentioned or should respond.
+    With TerpeneQueen + guests on a panel, general messages alternate host/guests and use light topic routing
+    so the host does not get every turn by default.
+    """
+    conversation_history = conversation_history or []
     message_lower = message.lower()
     mentioned = []
-    
+
     terpene_aliases = {
+        "terpenequeen": ["terpenequeen", "susan", "susan trapp", "terpene queen"],
         "limonene": ["limonene", "lemon", "citrus"],
         "myrcene": ["myrcene"],
         "pinene": ["pinene", "alpha-pinene", "pine"],
@@ -178,7 +270,7 @@ def detect_mentioned_terpenes(message: str, active_terpenes: List[str]) -> List[
         "bisabolol": ["bisabolol", "chamomile"],
         "geraniol": ["geraniol", "rose", "geranium"],
     }
-    
+
     for terpene_id in active_terpenes:
         if terpene_id.lower() in message_lower:
             mentioned.append(terpene_id)
@@ -188,12 +280,47 @@ def detect_mentioned_terpenes(message: str, active_terpenes: List[str]) -> List[
             if alias in message_lower:
                 mentioned.append(terpene_id)
                 break
-    
+
     if not mentioned:
-        if any(word in message_lower for word in ["all", "everyone", "panel", "you all"]):
+        if any(word in message_lower for word in ["all", "everyone", "panel", "you all", "what do you"]):
             return active_terpenes
-        return active_terpenes[:1] if active_terpenes else ["terpenequeen"]
-    
+        if len(active_terpenes) == 1:
+            return active_terpenes
+
+        guests = _panel_guests(active_terpenes)
+        has_tq = any(t.lower() == "terpenequeen" for t in active_terpenes)
+
+        if not guests:
+            return [active_terpenes[0]]
+
+        if has_tq and len(guests) >= 1:
+            hit = _topic_match_guest(message_lower, guests)
+            if hit:
+                return [hit]
+            # Science / mechanisms: guest terpenes answer in character—host should not take the first technical turn
+            science_cues = (
+                "the science", "science behind", "about science", "scientific",
+                "mechanism", "receptors", "receptor", "pathway", "biochemistry",
+                "neurotransmitter", "gaba", "cb1", "cb2", "endocannabinoid",
+                "how does it work", "how do they work", "at the molecular", "evidence for",
+            )
+            if any(cue in message_lower for cue in science_cues):
+                nxt = _pick_guest_round_robin(active_terpenes, conversation_history)
+                if nxt:
+                    return [nxt]
+            if not conversation_history:
+                return ["terpenequeen"]
+            last = _last_assistant_terpene_id(conversation_history)
+            if last == "terpenequeen":
+                nxt = _pick_guest_round_robin(active_terpenes, conversation_history)
+                return [nxt] if nxt else [guests[0]]
+            if last and last != "terpenequeen" and last in guests:
+                return ["terpenequeen"]
+            rr = _pick_guest_round_robin(active_terpenes, conversation_history)
+            return [rr] if rr else [guests[0]]
+
+        return [active_terpenes[0]]
+
     return list(set(mentioned))
 
 
@@ -383,7 +510,7 @@ def chat(request: Request):
         conversation_history = data.get("conversation_history", [])
         
         # Determine which terpenes should respond
-        responding_terpenes = detect_mentioned_terpenes(message, active_terpenes)
+        responding_terpenes = detect_mentioned_terpenes(message, active_terpenes, conversation_history)
         
         responses = []
         updated_history = conversation_history.copy()
@@ -404,6 +531,7 @@ def chat(request: Request):
             if len(active_terpenes) > 1:
                 other_names = [t for t in active_terpenes if t != terpene_id]
                 system_prompt += f"\n\nCONTEXT: You are in a panel discussion with: {', '.join(other_names)}. Respond when directly addressed. Keep responses concise."
+                system_prompt += "\n\nOUTPUT: In this message, speak ONLY as your own persona. Do not write dialogue, speeches, or replies for other terpenes—they have separate messages."
             
             # TerpeneQueen: explicit roster of who is "in the chat" so she invites guests by name
             if terpene_id == "terpenequeen":
@@ -499,6 +627,8 @@ def chat(request: Request):
             
             # Strip markdown formatting for conversational display
             assistant_text = strip_markdown(assistant_text)
+            if terpene_id == "terpenequeen" and len(_panel_guests(active_terpenes)) >= 1:
+                assistant_text = strip_fantasized_guest_dialogue_from_host(assistant_text)
             
             responses.append({
                 "terpene_id": terpene_id,
@@ -628,76 +758,9 @@ def chat(request: Request):
                     # Continue even if invitation detection fails
                     pass
         
-        # TerpeneQueen moderator follow-up: after a guest speaks in this same request, host reacts + asks follow-up
-        if "terpenequeen" in active_terpenes and responses:
-            guest_responses = [
-                r for r in responses
-                if r.get("terpene_id") and r["terpene_id"] != "terpenequeen"
-            ]
-            host_responses = [r for r in responses if r.get("terpene_id") == "terpenequeen"]
-            if guest_responses and host_responses:
-                try:
-                    from terpenes import get_terpene, build_host_panel_context, build_host_followup_system_addon
-                    tq = get_terpene("terpenequeen")
-                    follow_sys = (tq.get("system_prompt", TERPENE_PROMPTS["terpenequeen"])
-                                  + build_host_followup_system_addon())
-                    panel_ctx = build_host_panel_context(active_terpenes)
-                    if panel_ctx:
-                        follow_sys += "\n\n" + panel_ctx
-                    if "plain text" not in follow_sys.lower() and "markdown" not in follow_sys.lower():
-                        follow_sys += "\n\nIMPORTANT: Respond in plain text only - no markdown formatting."
-                    
-                    # Summarize all guest turns this round (there may be more than one)
-                    guest_blocks = []
-                    for gr in guest_responses:
-                        gid = gr["terpene_id"]
-                        preview = gr.get("response", "")[:1200]
-                        guest_blocks.append(f"- {gid} said:\n\"{preview}\"")
-                    guests_text = "\n\n".join(guest_blocks)
-                    
-                    follow_user_message = (
-                        f"You are still live on the mic as host. The user's latest message was:\n\"{message}\"\n\n"
-                        f"Guest speaker(s) in this segment just said:\n{guests_text}\n\n"
-                        "Acknowledge what they contributed (briefly). Then ask ONE follow-up question — "
-                        "to the user, to the same guest, or to another guest on the panel. "
-                        "Keep the conversation moving."
-                    )
-                    
-                    GenerativeModel = get_generative_model()
-                    follow_model = GenerativeModel(
-                        model_name="gemini-2.0-flash-001",
-                        system_instruction=follow_sys,
-                    )
-                    follow_history = build_vertex_chat_history(updated_history)
-                    if follow_history:
-                        follow_chat = follow_model.start_chat(history=follow_history)
-                        follow_resp = follow_chat.send_message(follow_user_message)
-                    else:
-                        follow_resp = follow_model.generate_content(follow_user_message)
-                    
-                    follow_text = follow_resp.text if follow_resp and hasattr(follow_resp, "text") else None
-                    if not follow_text and follow_resp and hasattr(follow_resp, "candidates") and follow_resp.candidates:
-                        cand = follow_resp.candidates[0]
-                        if hasattr(cand, "content") and hasattr(cand.content, "parts") and cand.content.parts:
-                            follow_text = cand.content.parts[0].text
-                    
-                    follow_text = strip_markdown(follow_text or "Thanks for sharing that! What would you like to dig into next?")
-                    
-                    responses.append({
-                        "terpene_id": "terpenequeen",
-                        "response": follow_text,
-                    })
-                    updated_history.append({
-                        "role": "assistant",
-                        "content": follow_text,
-                        "terpene_id": "terpenequeen",
-                    })
-                    print(f"DEBUG: Host follow-up generated ({len(follow_text)} chars)")
-                except Exception as host_fu_err:
-                    print(f"DEBUG: Host follow-up failed: {host_fu_err}")
-                    import traceback
-                    print(traceback.format_exc())
-        
+        # Optional: second TerpeneQueen turn in the same request was removed so the host does not
+        # stack messages after every guest reply—gives the user room to respond before the next host turn.
+
         origin = request.headers.get("Origin", "")
         return jsonify({
             "responses": responses,

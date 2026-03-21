@@ -89,12 +89,69 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-def detect_mentioned_terpenes(message: str, active_terpenes: List[str]) -> List[str]:
-    """Detect which terpenes are mentioned in the message"""
+def _panel_guests(active_terpenes: List[str]) -> List[str]:
+    return [t for t in active_terpenes if t and t.lower() != "terpenequeen"]
+
+
+def _last_assistant_terpene_id(conversation_history: List[Dict]) -> Optional[str]:
+    for msg in reversed(conversation_history or []):
+        if msg.get("role") == "assistant":
+            tid = msg.get("terpene_id")
+            if tid:
+                return tid
+    return None
+
+
+def _topic_match_guest(message_lower: str, guests: List[str]) -> Optional[str]:
+    if not guests:
+        return None
+    topic_keywords = {
+        "linalool": ["lavender", "linalool", "floral", "sleep", "relax", "calm", "insomnia", "bath", "soothing", "sedative", "tranquil"],
+        "limonene": ["limonene", "lemon", "citrus", "zest", "bright", "uplift", "energy", "mood", "orange"],
+        "myrcene": ["myrcene", "muscle", "couch", "earthy", "mango"],
+        "pinene": ["pinene", "pine", "forest", "focus", "alert", "memory", "clear"],
+        "caryophyllene": ["caryophyllene", "pepper", "clove", "spicy", "stress"],
+        "humulene": ["humulene", "hop", "beer", "appetite"],
+        "terpinolene": ["terpinolene", "herbal", "mysterious"],
+        "ocimene": ["ocimene", "basil", "sweet"],
+        "bisabolol": ["bisabolol", "chamomile", "skin"],
+        "geraniol": ["geraniol", "rose", "geranium"],
+    }
+    for tid in guests:
+        for kw in topic_keywords.get(tid, []):
+            if kw in message_lower:
+                return tid
+    try:
+        from terpenes import get_terpene
+        for tid in guests:
+            name = get_terpene(tid)["name"].lower()
+            if len(name) > 3 and name in message_lower:
+                return tid
+    except Exception:
+        pass
+    return None
+
+
+def _pick_guest_round_robin(active_terpenes: List[str], conversation_history: List[Dict]) -> Optional[str]:
+    guests = _panel_guests(active_terpenes)
+    if not guests:
+        return None
+    n = sum(1 for m in (conversation_history or []) if m.get("role") == "user")
+    return guests[n % len(guests)]
+
+
+def detect_mentioned_terpenes(
+    message: str,
+    active_terpenes: List[str],
+    conversation_history: Optional[List[Dict]] = None,
+) -> List[str]:
+    """Detect which terpenes are mentioned or should respond (panel routing when TerpeneQueen + guests)."""
+    conversation_history = conversation_history or []
     message_lower = message.lower()
     mentioned = []
-    
+
     terpene_aliases = {
+        "terpenequeen": ["terpenequeen", "susan", "susan trapp", "terpene queen"],
         "limonene": ["limonene", "lemon", "citrus"],
         "myrcene": ["myrcene"],
         "pinene": ["pinene", "alpha-pinene", "pine"],
@@ -106,7 +163,7 @@ def detect_mentioned_terpenes(message: str, active_terpenes: List[str]) -> List[
         "bisabolol": ["bisabolol", "chamomile"],
         "geraniol": ["geraniol", "rose", "geranium"],
     }
-    
+
     for terpene_id in active_terpenes:
         if terpene_id.lower() in message_lower:
             mentioned.append(terpene_id)
@@ -116,12 +173,46 @@ def detect_mentioned_terpenes(message: str, active_terpenes: List[str]) -> List[
             if alias in message_lower:
                 mentioned.append(terpene_id)
                 break
-    
+
     if not mentioned:
-        if any(word in message_lower for word in ["all", "everyone", "panel", "you all"]):
+        if any(word in message_lower for word in ["all", "everyone", "panel", "you all", "what do you"]):
             return active_terpenes
-        return active_terpenes[:1] if active_terpenes else ["terpenequeen"]
-    
+        if len(active_terpenes) == 1:
+            return active_terpenes
+
+        guests = _panel_guests(active_terpenes)
+        has_tq = any(t.lower() == "terpenequeen" for t in active_terpenes)
+
+        if not guests:
+            return [active_terpenes[0]]
+
+        if has_tq and len(guests) >= 1:
+            hit = _topic_match_guest(message_lower, guests)
+            if hit:
+                return [hit]
+            science_cues = (
+                "the science", "science behind", "about science", "scientific",
+                "mechanism", "receptors", "receptor", "pathway", "biochemistry",
+                "neurotransmitter", "gaba", "cb1", "cb2", "endocannabinoid",
+                "how does it work", "how do they work", "at the molecular", "evidence for",
+            )
+            if any(cue in message_lower for cue in science_cues):
+                nxt = _pick_guest_round_robin(active_terpenes, conversation_history)
+                if nxt:
+                    return [nxt]
+            if not conversation_history:
+                return ["terpenequeen"]
+            last = _last_assistant_terpene_id(conversation_history)
+            if last == "terpenequeen":
+                nxt = _pick_guest_round_robin(active_terpenes, conversation_history)
+                return [nxt] if nxt else [guests[0]]
+            if last and last != "terpenequeen" and last in guests:
+                return ["terpenequeen"]
+            rr = _pick_guest_round_robin(active_terpenes, conversation_history)
+            return [rr] if rr else [guests[0]]
+
+        return [active_terpenes[0]]
+
     return list(set(mentioned))
 
 
@@ -165,7 +256,7 @@ async def chat(request: ChatRequest):
         conversation_history = request.conversation_history or []
         
         # Determine which terpenes should respond
-        responding_terpenes = detect_mentioned_terpenes(message, active_terpenes)
+        responding_terpenes = detect_mentioned_terpenes(message, active_terpenes, conversation_history)
         
         responses = []
         updated_history = conversation_history.copy()
