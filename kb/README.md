@@ -13,8 +13,8 @@ Versioned, **human-curated** JSON records that tie **terpene (and optional canna
 
 ## Relationship to TerpTender
 
-- **`kb/`** — static, reviewable “reference” shapes (strain → one or more `coa_entries` with provenance).
-- **`api/terptender/`** — operational DB (Firestore) for dispensaries, products, and **real** structured LIMS ingests (`POST /imports/lab-results`).
+- **`kb/`** (this repo) — static, reviewable “reference” shapes (strain → one or more `coa_entries` with provenance).
+- **[TerpTender API](https://github.com/Terpedia/terptender)** (`server/` in that repo) — operational DB (Firestore) for dispensaries, products, and **real** structured LIMS ingests (`POST /imports/lab-results`).
 
 Workflow: verified lab rows can be summarized into `kb/strains/…` with `source_type: "single_lab_coa"` and a **citation**, or you can keep authoritative numbers only in TerpTender and use `kb` for aliases + narrative.
 
@@ -25,7 +25,7 @@ Use `single_lab_coa` only when you can cite lab + sample/batch. Prefer `market_a
 ## Adding a strain
 
 1. Copy `strains/_template.json` → `strains/<strain-id>.json` (kebab-case `strain_id`).
-2. Fill `coa_entries[].terpenes[]` with `analyte`, optional `value` + `unit`, optional `canonical` (align with `api/terptender/normalization.py` slugs when possible).
+2. Fill `coa_entries[].terpenes[]` with `analyte`, optional `value` + `unit`, optional `canonical` (align with TerpTender `server/normalization.py` slugs when possible).
 3. Append an object to `index.json` → `strains`.
 
 Optional: validate with any JSON Schema CLI against `schema/strain-coa.schema.json`.
