@@ -228,6 +228,22 @@
       border-color: #667eea;
     }
 
+    .autoplay-panel-label {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin: 0 0 0.75rem 0;
+      font-size: 0.85rem;
+      color: #555;
+      cursor: pointer;
+      user-select: none;
+      justify-content: center;
+    }
+
+    .autoplay-panel-label input {
+      cursor: pointer;
+    }
+
     .input-wrapper {
       display: flex;
       gap: 1rem;
@@ -427,6 +443,10 @@
         <button class="mode-button active" id="textModeBtn">✍️ Text</button>
         <button class="mode-button" id="audioModeBtn">🎤 Voice</button>
       </div>
+      <label class="autoplay-panel-label" title="One long request; keep this tab open">
+        <input type="checkbox" id="panelAutoplay15" checked />
+        Panel keeps talking ~15 minutes (autoplay)
+      </label>
 
       <div id="textInputWrapper" class="input-wrapper">
         <div class="text-input-wrapper">
@@ -591,6 +611,8 @@
       sendButton.disabled = true;
       sendButton.innerHTML = '<span class="loading"></span>';
 
+      const autoplayMin = document.getElementById('panelAutoplay15')?.checked ? 15 : 0;
+
       try {
         if (!API_URL) {
           throw new Error('API URL not configured. Please enter your Cloud Function URL.');
@@ -604,7 +626,9 @@
             message: message,
             active_terpenes: activeTerpenes,
             conversation_history: conversationHistory,
+            autoplay_panel_minutes: autoplayMin,
           }),
+          signal: AbortSignal.timeout(autoplayMin > 0 ? 970000 : 180000),
         });
 
         if (!response.ok) {
@@ -909,6 +933,7 @@
           return;
         }
 
+        const autoplayMinVoice = document.getElementById('panelAutoplay15')?.checked ? 15 : 0;
         const chatResponse = await fetch(`${API_URL}/chat`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -916,7 +941,9 @@
             message: userTranscript,
             active_terpenes: activeTerpenes,
             conversation_history: conversationHistory,
+            autoplay_panel_minutes: autoplayMinVoice,
           }),
+          signal: AbortSignal.timeout(autoplayMinVoice > 0 ? 970000 : 180000),
         });
 
         if (!chatResponse.ok) {

@@ -204,6 +204,22 @@ def _last_assistant_terpene_id(conversation_history: List[Dict]) -> Optional[str
     return None
 
 
+def _prev_assistant_terpene_id(conversation_history: List[Dict]) -> Optional[str]:
+    """The assistant turn before the most recent assistant (for panel routing)."""
+    seen_last = False
+    for msg in reversed(conversation_history or []):
+        if msg.get("role") != "assistant":
+            continue
+        tid = msg.get("terpene_id")
+        if not tid:
+            continue
+        if not seen_last:
+            seen_last = True
+            continue
+        return tid
+    return None
+
+
 def _topic_match_guest(message_lower: str, guests: List[str]) -> Optional[str]:
     """Route general user messages to a guest when keywords match their expertise."""
     if not guests:
@@ -294,28 +310,32 @@ def detect_mentioned_terpenes(
             return [active_terpenes[0]]
 
         if has_tq and len(guests) >= 1:
-            hit = _topic_match_guest(message_lower, guests)
-            if hit:
-                return [hit]
-            # Science / mechanisms: guest terpenes answer in character—host should not take the first technical turn
+            # First API request: let TerpeneQueen host so she can invite guests in one round.
+            # Otherwise keywords like "focus" route straight to Pinene and the panel "stops" there.
+            if not conversation_history:
+                return ["terpenequeen"]
+            last = _last_assistant_terpene_id(conversation_history)
+            if last and last != "terpenequeen" and last in guests:
+                return ["terpenequeen"]
             science_cues = (
                 "the science", "science behind", "about science", "scientific",
                 "mechanism", "receptors", "receptor", "pathway", "biochemistry",
                 "neurotransmitter", "gaba", "cb1", "cb2", "endocannabinoid",
                 "how does it work", "how do they work", "at the molecular", "evidence for",
             )
-            if any(cue in message_lower for cue in science_cues):
-                nxt = _pick_guest_round_robin(active_terpenes, conversation_history)
-                if nxt:
-                    return [nxt]
-            if not conversation_history:
-                return ["terpenequeen"]
-            last = _last_assistant_terpene_id(conversation_history)
             if last == "terpenequeen":
+                prev_tid = _prev_assistant_terpene_id(conversation_history)
+                if prev_tid and prev_tid in guests:
+                    return ["terpenequeen"]
+                hit = _topic_match_guest(message_lower, guests)
+                if hit:
+                    return [hit]
+                if any(cue in message_lower for cue in science_cues):
+                    nxt = _pick_guest_round_robin(active_terpenes, conversation_history)
+                    if nxt:
+                        return [nxt]
                 nxt = _pick_guest_round_robin(active_terpenes, conversation_history)
                 return [nxt] if nxt else [guests[0]]
-            if last and last != "terpenequeen" and last in guests:
-                return ["terpenequeen"]
             rr = _pick_guest_round_robin(active_terpenes, conversation_history)
             return [rr] if rr else [guests[0]]
 
@@ -595,7 +615,16 @@ def chat(request: Request):
                 other_names = [t for t in active_terpenes if t != terpene_id]
                 system_prompt += f"\n\nCONTEXT: You are in a panel discussion with: {', '.join(other_names)}. Respond when directly addressed. Keep responses concise."
                 system_prompt += "\n\nOUTPUT: In this message, speak ONLY as your own persona. Do not write dialogue, speeches, or replies for other terpenes—they have separate messages."
-            
+                system_prompt += (
+                    "\n\nHUMAN PACE: This should feel like **people talking**, not a rapid Q&A machine—"
+                    "natural rhythm, one main beat per turn unless the topic truly needs more."
+                )
+                if terpene_id != "terpenequeen":
+                    system_prompt += (
+                        "\n\nLISTENER: If it fits naturally, close with a light nod toward the human; "
+                        "you do not need to force a question every turn."
+                    )
+
             # TerpeneQueen: explicit roster of who is "in the chat" so she invites guests by name
             if terpene_id == "terpenequeen":
                 try:
@@ -688,11 +717,15 @@ def chat(request: Request):
             if not assistant_text:
                 assistant_text = "I'm sorry, I didn't get a response. Could you try again?"
             
-            # Strip markdown formatting for conversational display
-            assistant_text = strip_markdown(assistant_text)
+            # Strip markdown; keep pre-truncation text for invite detection (strip may remove
+            # later host questions to guests that appear after fantasized guest lines).
+            assistant_text_md = strip_markdown(assistant_text)
+            tq_for_invite = assistant_text_md
             if terpene_id == "terpenequeen" and len(_panel_guests(active_terpenes)) >= 1:
-                assistant_text = strip_fantasized_guest_dialogue_from_host(assistant_text)
-            
+                assistant_text = strip_fantasized_guest_dialogue_from_host(assistant_text_md)
+            else:
+                assistant_text = assistant_text_md
+
             responses.append({
                 "terpene_id": terpene_id,
                 "response": assistant_text
@@ -717,7 +750,7 @@ def chat(request: Request):
                         all_terpene_ids = active_terpenes
                     
                     invited_terpenes = detect_invited_terpenes(
-                        assistant_text, all_terpene_ids, panel_terpene_ids=active_terpenes
+                        tq_for_invite, all_terpene_ids, panel_terpene_ids=active_terpenes
                     )
                     print(f"DEBUG: TerpeneQueen response: {assistant_text[:200]}")
                     print(f"DEBUG: All available terpenes: {all_terpene_ids}")
@@ -731,7 +764,7 @@ def chat(request: Request):
                             print(f"DEBUG: {invited_id} already responded: {already_responded}")
                             if not already_responded:
                                 print(f"DEBUG: {invited_id} not yet responded, generating response...")
-                                print(f"DEBUG: Full TerpeneQueen message for context: {assistant_text}")
+                                print(f"DEBUG: Full TerpeneQueen message for context: {tq_for_invite[:500]}")
                                 # Get the terpene's system prompt
                                 try:
                                     from terpenes import get_terpene
@@ -741,8 +774,13 @@ def chat(request: Request):
                                     invited_system_prompt = TERPENE_PROMPTS.get(invited_id, TERPENE_PROMPTS["terpenequeen"])
                                 
                                 # Add context that TerpeneQueen is asking them a question
-                                invited_system_prompt += f"\n\nCONTEXT: TerpeneQueen (Susan Trapp, PhD) just asked you a question: \"{assistant_text}\" Please respond to her question naturally and in character."
-                                
+                                invited_system_prompt += f"\n\nCONTEXT: TerpeneQueen (Susan Trapp, PhD) just asked you a question: \"{tq_for_invite}\" Please respond to her question naturally and in character."
+                                invited_system_prompt += (
+                                    "\n\nPACE: Relaxed **human** rhythm—let your point land before you tack on extras.\n"
+                                    "LISTENER: Optionally invite the human with a warm line or question; "
+                                    "it doesn't have to be every message."
+                                )
+
                                 # Add plain text instruction if not present
                                 if "plain text" not in invited_system_prompt.lower() and "markdown" not in invited_system_prompt.lower():
                                     invited_system_prompt += "\n\nIMPORTANT: Respond in plain text only - no markdown formatting (no **bold**, *italic*, # headers, `code`, [links](url), etc.). Write naturally as if speaking in a conversation."
@@ -760,7 +798,7 @@ def chat(request: Request):
                                 # Generate response to TerpeneQueen's question
                                 try:
                                     # Build a simpler prompt for the invited terpene
-                                    invitation_prompt = f"TerpeneQueen (Susan Trapp, PhD) just asked you: \"{assistant_text}\"\n\nPlease respond to her question naturally and in character."
+                                    invitation_prompt = f"TerpeneQueen (Susan Trapp, PhD) just asked you: \"{tq_for_invite}\"\n\nPlease respond to her question naturally and in character."
                                     
                                     if invited_history:
                                         invited_chat = invited_model.start_chat(history=invited_history)
@@ -816,15 +854,69 @@ def chat(request: Request):
                                         "content": error_response,
                                         "terpene_id": invited_id
                                     })
+
+                        panel_guest_ids = set(_panel_guests(active_terpenes))
+                        if panel_guest_ids and any(
+                            r.get("terpene_id") in panel_guest_ids for r in responses
+                        ):
+                            try:
+                                from terpenes import get_terpene as _gtq_closing
+                                tq_base = _gtq_closing("terpenequeen").get(
+                                    "system_prompt", TERPENE_PROMPTS["terpenequeen"]
+                                )
+                            except ImportError:
+                                tq_base = TERPENE_PROMPTS["terpenequeen"]
+                            closing_si = (
+                                tq_base
+                                + "\n\nTHIS MESSAGE ONLY — CLOSING BEAT: Guest terpenes have already replied above. "
+                                "Do not invite another terpene. In 2–4 sentences, briefly acknowledge what was shared, "
+                                "then invite the **human listener** with one natural, welcoming question or open door—"
+                                "like ending a real conversation, not a survey. "
+                                "Optionally one short line on how you might continue **when** they answer. "
+                                "Plain text only."
+                            )
+                            if "plain text" not in closing_si.lower():
+                                closing_si += "\n\nIMPORTANT: Plain text only, no markdown."
+                            GenerativeModel = get_generative_model()
+                            closing_model = GenerativeModel(
+                                model_name="gemini-2.0-flash-001",
+                                system_instruction=closing_si,
+                            )
+                            closing_hist = build_vertex_chat_history(updated_history)
+                            closing_msg = (
+                                "[Host closing for this round] Wrap this beat the way you would in person—"
+                                "warm, unhurried, one clear thread for them to pick up if they want."
+                            )
+                            try:
+                                if closing_hist:
+                                    c_chat = closing_model.start_chat(history=closing_hist)
+                                    c_resp = c_chat.send_message(closing_msg)
+                                else:
+                                    c_resp = closing_model.generate_content(closing_msg)
+                                c_text = c_resp.text if c_resp and hasattr(c_resp, "text") else None
+                                if not c_text and c_resp and hasattr(c_resp, "candidates") and c_resp.candidates:
+                                    cand = c_resp.candidates[0]
+                                    if hasattr(cand, "content") and hasattr(cand.content, "parts"):
+                                        c_text = cand.content.parts[0].text if cand.content.parts else None
+                                if c_text:
+                                    c_text = strip_markdown(c_text)
+                                    responses.append({
+                                        "terpene_id": "terpenequeen",
+                                        "response": c_text,
+                                    })
+                                    updated_history.append({
+                                        "role": "assistant",
+                                        "content": c_text,
+                                        "terpene_id": "terpenequeen",
+                                    })
+                            except Exception as close_err:
+                                print(f"DEBUG: host closing beat: {close_err}")
                 except Exception as invite_error:
                     print(f"DEBUG: Error in invitation detection: {str(invite_error)}")
                     import traceback
                     print(f"DEBUG: Invitation traceback: {traceback.format_exc()}")
                     # Continue even if invitation detection fails
                     pass
-        
-        # Optional: second TerpeneQueen turn in the same request was removed so the host does not
-        # stack messages after every guest reply—gives the user room to respond before the next host turn.
 
         origin = request.headers.get("Origin", "")
         return jsonify({

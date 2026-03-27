@@ -1,0 +1,46 @@
+{
+  "strain_id": "blue-dream",
+  "strain_names": ["Blue Dream"],
+  "aliases": ["Azure Haze"],
+  "species": "hybrid",
+  "lineage_notes": "Often described as Blueberry x Haze lineage; chemotypes vary widely.",
+  "kb_version": 1,
+  "last_reviewed": null,
+  "coa_entries": [
+    {
+      "entry_id": "blue-dream-market-aggregate-v1",
+      "title": "Typical dominant terpenes (aggregate / illustrative)",
+      "source_type": "market_aggregate",
+      "citation": null,
+      "lab_name": null,
+      "sample_id": null,
+      "batch_id": null,
+      "collected_at": null,
+      "instrument_method": null,
+      "terpenes": [
+        {
+          "analyte": "Myrcene",
+          "canonical": "myrcene",
+          "note": "Often reported among dominant monoterpenes in Blue Dream–type profiles"
+        },
+        {
+          "analyte": "Pinene",
+          "canonical": "pinene",
+          "note": "alpha/beta pinene commonly reported"
+        },
+        {
+          "analyte": "Caryophyllene",
+          "canonical": "caryophyllene",
+          "note": "Frequently present in hybrid profiles"
+        },
+        {
+          "analyte": "Humulene",
+          "canonical": "humulene",
+          "note": "Often co-reported with caryophyllene"
+        }
+      ],
+      "cannabinoids": [],
+      "disclaimer": "Not a single lab COA. Batch, grow, and lab method change results. Replace with cited single_lab_coa when available."
+    }
+  ]
+}

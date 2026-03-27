@@ -114,6 +114,22 @@ def _last_assistant_terpene_id(conversation_history: List[Dict]) -> Optional[str
     return None
 
 
+def _prev_assistant_terpene_id(conversation_history: List[Dict]) -> Optional[str]:
+    """The assistant turn before the most recent assistant (for panel routing)."""
+    seen_last = False
+    for msg in reversed(conversation_history or []):
+        if msg.get("role") != "assistant":
+            continue
+        tid = msg.get("terpene_id")
+        if not tid:
+            continue
+        if not seen_last:
+            seen_last = True
+            continue
+        return tid
+    return None
+
+
 def _topic_match_guest(message_lower: str, guests: List[str]) -> Optional[str]:
     if not guests:
         return None
@@ -203,27 +219,30 @@ def detect_mentioned_terpenes(
             return [active_terpenes[0]]
 
         if has_tq and len(guests) >= 1:
-            hit = _topic_match_guest(message_lower, guests)
-            if hit:
-                return [hit]
+            if not conversation_history:
+                return ["terpenequeen"]
+            last = _last_assistant_terpene_id(conversation_history)
+            if last and last != "terpenequeen" and last in guests:
+                return ["terpenequeen"]
             science_cues = (
                 "the science", "science behind", "about science", "scientific",
                 "mechanism", "receptors", "receptor", "pathway", "biochemistry",
                 "neurotransmitter", "gaba", "cb1", "cb2", "endocannabinoid",
                 "how does it work", "how do they work", "at the molecular", "evidence for",
             )
-            if any(cue in message_lower for cue in science_cues):
-                nxt = _pick_guest_round_robin(active_terpenes, conversation_history)
-                if nxt:
-                    return [nxt]
-            if not conversation_history:
-                return ["terpenequeen"]
-            last = _last_assistant_terpene_id(conversation_history)
             if last == "terpenequeen":
+                prev_tid = _prev_assistant_terpene_id(conversation_history)
+                if prev_tid and prev_tid in guests:
+                    return ["terpenequeen"]
+                hit = _topic_match_guest(message_lower, guests)
+                if hit:
+                    return [hit]
+                if any(cue in message_lower for cue in science_cues):
+                    nxt = _pick_guest_round_robin(active_terpenes, conversation_history)
+                    if nxt:
+                        return [nxt]
                 nxt = _pick_guest_round_robin(active_terpenes, conversation_history)
                 return [nxt] if nxt else [guests[0]]
-            if last and last != "terpenequeen" and last in guests:
-                return ["terpenequeen"]
             rr = _pick_guest_round_robin(active_terpenes, conversation_history)
             return [rr] if rr else [guests[0]]
 

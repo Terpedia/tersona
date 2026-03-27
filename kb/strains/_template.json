@@ -1,0 +1,25 @@
+{
+  "strain_id": "your-strain-slug",
+  "strain_names": ["Your Strain"],
+  "aliases": [],
+  "species": "hybrid",
+  "lineage_notes": "",
+  "kb_version": 1,
+  "last_reviewed": null,
+  "coa_entries": [
+    {
+      "entry_id": "your-strain-placeholder-001",
+      "title": "Placeholder — replace with real COA or cited aggregate",
+      "source_type": "placeholder",
+      "citation": null,
+      "lab_name": null,
+      "sample_id": null,
+      "batch_id": null,
+      "collected_at": null,
+      "instrument_method": null,
+      "terpenes": [],
+      "cannabinoids": [],
+      "disclaimer": "Add verified lab COA rows or a literature citation before using for product claims."
+    }
+  ]
+}

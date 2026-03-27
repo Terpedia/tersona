@@ -23,6 +23,7 @@ GitHub Pages site to chat with 10 terpene personas (see `src/`).
 
 ## Quick Links
 
+- **Strain terpene COA KB** (curated JSON by strain): [kb/README.md](kb/README.md)
 - **GCP Deployment Guide**: [deploy/librechat-gcp/README.md](deploy/librechat-gcp/README.md)
 - **Route 53 Setup**: [deploy/ROUTE53_SETUP_COMPLETE.md](deploy/ROUTE53_SETUP_COMPLETE.md)
 - **TerpeneQueen Persona**: [deploy/librechat-gcp/docs/TERPENEQUEEN.md](deploy/librechat-gcp/docs/TERPENEQUEEN.md)

@@ -1,0 +1,46 @@
+{
+  "strain_id": "gelato",
+  "strain_names": ["Gelato"],
+  "aliases": ["Larry Bird", "Gelato #33"],
+  "species": "hybrid",
+  "lineage_notes": "Sunset Sherbet x Thin Mint GSC; many numbered phenotypes.",
+  "kb_version": 1,
+  "last_reviewed": null,
+  "coa_entries": [
+    {
+      "entry_id": "gelato-market-aggregate-v1",
+      "title": "Typical dominant terpenes (aggregate / illustrative)",
+      "source_type": "market_aggregate",
+      "citation": null,
+      "lab_name": null,
+      "sample_id": null,
+      "batch_id": null,
+      "collected_at": null,
+      "instrument_method": null,
+      "terpenes": [
+        {
+          "analyte": "Caryophyllene",
+          "canonical": "caryophyllene",
+          "note": "Commonly cited as dominant in dessert / Cookies-lineage types"
+        },
+        {
+          "analyte": "Limonene",
+          "canonical": "limonene",
+          "note": "Often significant in Gelato-type aromatics"
+        },
+        {
+          "analyte": "Humulene",
+          "canonical": "humulene",
+          "note": "Frequently co-reported"
+        },
+        {
+          "analyte": "Linalool",
+          "canonical": "linalool",
+          "note": "Variable; appears in some COA panels"
+        }
+      ],
+      "cannabinoids": [],
+      "disclaimer": "Not a single lab COA. Phenotype (#33, #41, etc.) and grow strongly affect chemistry."
+    }
+  ]
+}

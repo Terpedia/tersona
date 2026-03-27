@@ -1,0 +1,15 @@
+{
+  "description": "Index of strain COA KB records under kb/strains/*.json (excluding _template.json).",
+  "strains": [
+    {
+      "strain_id": "blue-dream",
+      "primary_name": "Blue Dream",
+      "path": "strains/blue-dream.json"
+    },
+    {
+      "strain_id": "gelato",
+      "primary_name": "Gelato",
+      "path": "strains/gelato.json"
+    }
+  ]
+}

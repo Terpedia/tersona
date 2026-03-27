@@ -4,3 +4,9 @@ dist/
 .DS_Store
 *.log
 .astro/
+
+__pycache__/
+*.py[cod]
+*.pyc
+.venv/
+.venv-test/
