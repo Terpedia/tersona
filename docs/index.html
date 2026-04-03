@@ -204,9 +204,17 @@
 
     .audio-controls {
       display: flex;
+      flex-wrap: wrap;
       gap: 0.5rem;
       margin-top: 0.5rem;
       align-items: center;
+    }
+
+    .tts-error-msg {
+      font-size: 0.78rem;
+      color: #b71c1c;
+      margin-top: 0.35rem;
+      line-height: 1.35;
     }
 
     .audio-button {
@@ -479,9 +487,9 @@
     <div class="messages" id="messages"></div>
     <div class="input-area">
       <div class="voice-options-row">
-        <label title="Attach spoken audio to each assistant reply (per speaker voice)">
+        <label title="Fetches voice audio for each reply and tries to play automatically after you send; you can still use the play bar if your browser blocks autoplay">
           <input type="checkbox" id="voiceOutputToggle" checked />
-          Read assistant replies aloud (audio on each message)
+          Read assistant replies aloud (auto-play when possible)
         </label>
       </div>
       <label class="autoplay-panel-label" title="One long request; keep this tab open">
@@ -541,6 +549,76 @@
     let activeTerpenes = []; // Filled to all terpenes on load
     let terpenes = [];
 
+    /** TTS clips play one-after-another (panel); avoids overlap and helps autoplay after async fetch. */
+    let ttsPlayQueue = [];
+    let ttsPlayQueueBusy = false;
+
+    /**
+     * Run during a real user gesture (Send, Start mic). Browsers block audio.play() after await fetch()
+     * unless the media stack was touched in the same gesture chain — this unlocks playback.
+     */
+    function primeAudioPlaybackUnlock() {
+      try {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        if (Ctx) {
+          const ctx = new Ctx();
+          const done = () => {
+            try {
+              ctx.close();
+            } catch (_) {}
+          };
+          ctx.resume().then(done).catch(done);
+        }
+      } catch (_) {}
+      try {
+        const a = new Audio(
+          'data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA'
+        );
+        a.volume = 0.0001;
+        const p = a.play();
+        if (p && typeof p.then === 'function') {
+          p.then(() => {
+            try {
+              a.pause();
+            } catch (_) {}
+          }).catch(() => {});
+        }
+      } catch (_) {}
+    }
+
+    function pumpTtsPlaybackQueue() {
+      if (ttsPlayQueueBusy || !ttsPlayQueue.length) return;
+      const a = ttsPlayQueue.shift();
+      if (!a || !a.play) {
+        pumpTtsPlaybackQueue();
+        return;
+      }
+      ttsPlayQueueBusy = true;
+      let finished = false;
+      const advanceOnce = () => {
+        if (finished) return;
+        finished = true;
+        ttsPlayQueueBusy = false;
+        pumpTtsPlaybackQueue();
+      };
+      a.addEventListener('ended', advanceOnce, { once: true });
+      a.addEventListener('error', advanceOnce, { once: true });
+      const tryPlay = () => {
+        const p = a.play();
+        if (p && typeof p.catch === 'function') {
+          p.catch(() => advanceOnce());
+        }
+      };
+      if (a.readyState >= 2) tryPlay();
+      else a.addEventListener('canplay', tryPlay, { once: true });
+    }
+
+    function enqueueAssistantTtsPlayback(audioEl) {
+      if (!audioEl) return;
+      ttsPlayQueue.push(audioEl);
+      pumpTtsPlaybackQueue();
+    }
+
     function sleep(ms) {
       return new Promise((resolve) => setTimeout(resolve, ms));
     }
@@ -587,9 +665,19 @@
       activeTerpenes = terpenes.length ? terpenes.map((t) => t.id) : [];
     }
 
+    /** Fire-and-forget: wake Cloud Run + prime Vertex so first /chat is faster. */
+    function primeBackendWarm() {
+      if (!API_URL) return;
+      const base = API_URL.replace(/\/$/, '');
+      fetch(`${base}/warm`, { method: 'GET', signal: AbortSignal.timeout(120000) }).catch(
+        () => {}
+      );
+    }
+
     async function loadApiUrl() {
       API_URL = localStorage.getItem('api_url') || DEFAULT_API_URL;
-      
+      primeBackendWarm();
+
       // Show chat interface directly (API URL is set by default)
       await loadTerpenes();
       updateHeader();
@@ -633,6 +721,17 @@
       return !!(el && el.checked);
     }
 
+    function showTtsLoadError(messageDiv, detail) {
+      const contentDiv = messageDiv && messageDiv.querySelector('.message-content');
+      if (!contentDiv || contentDiv.querySelector('.tts-error-msg')) return;
+      const d = document.createElement('div');
+      d.className = 'tts-error-msg';
+      d.textContent = detail || 'Could not load voice audio. Use the play control if it appears, or check the browser console.';
+      const ts = contentDiv.querySelector('.message-timestamp');
+      if (ts) contentDiv.insertBefore(d, ts);
+      else contentDiv.appendChild(d);
+    }
+
     /** Fetch TTS and append a player to a specific assistant message bubble. */
     async function attachTtsToMessageEl(messageDiv, text, terpeneId) {
       if (!API_URL || !messageDiv || !text || !String(text).trim()) return;
@@ -642,8 +741,24 @@
         ttsFormData.append('text', text);
         ttsFormData.append('terpene_id', tid);
         const ttsResponse = await fetch(`${API_URL}/tts`, { method: 'POST', body: ttsFormData });
-        if (!ttsResponse.ok) return;
-        const audioBlob = await ttsResponse.blob();
+        if (!ttsResponse.ok) {
+          const errBody = await ttsResponse.text();
+          console.error('TTS HTTP', ttsResponse.status, errBody);
+          showTtsLoadError(
+            messageDiv,
+            'Voice audio failed to load (HTTP ' + ttsResponse.status + '). You can still read the text above.'
+          );
+          return;
+        }
+        const mime =
+          ttsResponse.headers.get('content-type') || 'audio/mpeg';
+        const buf = await ttsResponse.arrayBuffer();
+        if (!buf || buf.byteLength < 64) {
+          console.error('TTS empty or tiny body', buf && buf.byteLength);
+          showTtsLoadError(messageDiv, 'Voice audio response was empty.');
+          return;
+        }
+        const audioBlob = new Blob([buf], { type: mime.split(';')[0].trim() || 'audio/mpeg' });
         const audioUrl = URL.createObjectURL(audioBlob);
         const contentDiv = messageDiv.querySelector('.message-content');
         if (!contentDiv) return;
@@ -658,10 +773,18 @@
         const audio = document.createElement('audio');
         audio.src = audioUrl;
         audio.controls = true;
+        audio.preload = 'auto';
+        audio.setAttribute('playsinline', '');
         audio.style.width = '100%';
+        audio.style.minWidth = '200px';
+        audio.setAttribute('aria-label', 'Play spoken reply');
         audioControls.appendChild(audio);
+        if (isVoiceOutputEnabled()) {
+          enqueueAssistantTtsPlayback(audio);
+        }
       } catch (e) {
         console.warn('TTS failed:', e);
+        showTtsLoadError(messageDiv, 'Voice audio error: ' + (e.message || 'network'));
       }
     }
 
@@ -732,6 +855,8 @@
       const input = document.getElementById('messageInput');
       const message = input.value.trim();
       if (!message) return;
+
+      primeAudioPlaybackUnlock();
 
       addMessage('user', message);
       input.value = '';
@@ -856,6 +981,7 @@
             autoGainControl: true,
           },
         });
+        primeAudioPlaybackUnlock();
         voiceAudioContext = new (window.AudioContext || window.webkitAudioContext)();
         const source = voiceAudioContext.createMediaStreamSource(voiceStream);
         voiceAnalyser = voiceAudioContext.createAnalyser();
@@ -1157,6 +1283,7 @@
             const st = document.getElementById('recordingStatus');
             if (st) st.textContent = 'Microphone off — type above, or start the mic to speak hands-free.';
           } else {
+            primeAudioPlaybackUnlock();
             startHandsFreeVoice();
           }
         });

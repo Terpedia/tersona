@@ -21,6 +21,10 @@ VERTEX_AI_INITIALIZED = False
 VERTEX_AI_AVAILABLE = True
 SPEECH_AVAILABLE = True
 
+# Throttle expensive LLM ping in /warm (many tabs / refreshes)
+_last_llm_warm_ts: float = 0.0
+LLM_WARM_MIN_INTERVAL_SEC = float(os.getenv("LLM_WARM_MIN_INTERVAL_SEC", "90"))
+
 def init_vertex_ai():
     """Lazy initialization of Vertex AI"""
     global VERTEX_AI_INITIALIZED, VERTEX_AI_AVAILABLE
@@ -624,6 +628,58 @@ class ChatResponse(BaseModel):
 async def health():
     """Health check"""
     return {"status": "ok", "service": "terpene-api"}
+
+
+@app.get("/warm")
+async def warm():
+    """
+    Wake Cloud Run, initialize Vertex, and optionally run a tiny LLM call so the first
+    real /chat is faster. Safe to call from the browser on page load (idempotent).
+    """
+    global _last_llm_warm_ts
+    t0 = time.time()
+    init_vertex_ai()
+    out = {
+        "status": "ok",
+        "service": "terpene-api",
+        "vertex_initialized": VERTEX_AI_INITIALIZED and VERTEX_AI_AVAILABLE,
+        "llm_ping": False,
+    }
+    if not VERTEX_AI_AVAILABLE:
+        out["note"] = "Vertex AI unavailable; container only warmed"
+        out["elapsed_ms"] = int((time.time() - t0) * 1000)
+        return out
+
+    now = time.time()
+    if now - _last_llm_warm_ts < LLM_WARM_MIN_INTERVAL_SEC:
+        out["llm_ping_skipped"] = True
+        out["llm_ping_skip_sec"] = round(LLM_WARM_MIN_INTERVAL_SEC - (now - _last_llm_warm_ts), 1)
+        out["elapsed_ms"] = int((time.time() - t0) * 1000)
+        return out
+
+    try:
+        GenerativeModel = get_generative_model()
+        try:
+            from vertexai.generative_models import GenerationConfig
+
+            gen_cfg = GenerationConfig(max_output_tokens=8, candidate_count=1, temperature=0)
+        except Exception:
+            gen_cfg = None
+
+        model = GenerativeModel(
+            model_name="gemini-2.0-flash-001",
+            system_instruction="Reply with exactly the single word: OK",
+        )
+        if gen_cfg is not None:
+            model.generate_content(".", generation_config=gen_cfg)
+        else:
+            model.generate_content(".")
+        _last_llm_warm_ts = time.time()
+        out["llm_ping"] = True
+    except Exception as e:
+        out["llm_ping_error"] = str(e)[:200]
+    out["elapsed_ms"] = int((time.time() - t0) * 1000)
+    return out
 
 
 @app.post("/chat")
