@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse
 from pydantic import BaseModel, Field
 from typing import List, Dict, Optional
+import asyncio
 import os
 import json
 import re
@@ -631,10 +632,14 @@ async def health():
 
 
 @app.get("/warm")
-async def warm():
+def warm():
     """
     Wake Cloud Run, initialize Vertex, and optionally run a tiny LLM call so the first
     real /chat is faster. Safe to call from the browser on page load (idempotent).
+
+    Implemented as a **sync** route so FastAPI runs it in a thread pool; Vertex
+    `generate_content` is blocking and must not run on the asyncio event loop (that
+    would freeze /health, /chat, and /tts for all clients).
     """
     global _last_llm_warm_ts
     t0 = time.time()
@@ -683,11 +688,13 @@ async def warm():
 
 
 @app.post("/chat")
-async def chat(request: ChatRequest):
+def chat(request: ChatRequest):
     """
     POST /chat
     Body: message, active_terpenes, conversation_history,
     optional autoplay_panel_minutes (0–15): host+guests keep taking turns for ~that many minutes.
+
+    Sync route (thread pool): Vertex SDK calls are blocking and must not stall the event loop.
     """
     init_vertex_ai()
     if not VERTEX_AI_AVAILABLE:
@@ -978,9 +985,9 @@ async def speech_to_text(
 
         audio = speech_v1.RecognitionAudio(content=audio_content)
         
-        # Perform transcription
+        # Perform transcription (blocking gRPC — do not block the event loop)
         client = get_speech_client()
-        response = client.recognize(config=config, audio=audio)
+        response = await asyncio.to_thread(client.recognize, config=config, audio=audio)
         
         # Extract transcript
         transcript = ""
@@ -1005,7 +1012,7 @@ async def speech_to_text(
 
 
 @app.post("/tts")
-async def text_to_speech(
+def text_to_speech(
     text: str = Form(...),
     terpene_id: str = Form("terpenequeen"),
     speed: float = Form(1.0),
@@ -1015,6 +1022,8 @@ async def text_to_speech(
     POST /tts
     Body: form-data with text, terpene_id, speed
     Returns: MP3 audio
+
+    Sync route (thread pool): TTS client call is blocking.
     """
     if not SPEECH_AVAILABLE:
         raise HTTPException(status_code=500, detail="Text-to-Speech not available")
