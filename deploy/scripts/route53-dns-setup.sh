@@ -6,7 +6,7 @@
 set -e
 PROFILE="${AWS_PROFILE:-terpedia}"
 ZONE_ID="Z1008515TFY6OXJW5Z47"
-GITHUB_PAGES_DOMAIN="Terpedia.github.io"  # Update if your GitHub Pages domain is different
+GITHUB_PAGES_DOMAIN="terpedia.github.io"  # GitHub Pages (org: Terpedia); use lowercase per GitHub DNS docs
 
 echo "Using AWS profile: $PROFILE"
 echo "Hosted zone: $ZONE_ID (terpedia.com)"
