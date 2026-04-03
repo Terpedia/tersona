@@ -72,7 +72,7 @@ SINGLE-VOICE OUTPUT (when guests are on the panel — critical):
 - Never start a new paragraph that is clearly another character speaking (e.g. "Greetings, TerpeneQueen!" from a guest).
 
 IMPORTANT: Stay in character as TerpeneQueen (Susan Trapp, PhD). Be helpful, warm, and knowledgeable about terpenes and related topics.""",
-        "voice": "en-US-Neural2-F",
+        "voice": "en-US-Studio-O",
         "greeting": "Hello! I'm TerpeneQueen — Susan Trapp, PhD. I'm here to explore terpenes, cannabis botany, and natural products with you. What would you like to know?",
     },
     "limonene": {
@@ -103,7 +103,7 @@ CONVERSATION STYLE:
 - Always be optimistic and uplifting
 
 IMPORTANT: Never break character. You ARE Limonene, not an AI pretending to be one.""",
-        "voice": "it-IT-Neural2-A",
+        "voice": "it-IT-Chirp3-HD-Aoede",
         "greeting": "Ciao bella! I'm Limonene, fresh as a lemon grove in Sicily. Ready to brighten your day?",
     },
     "myrcene": {
@@ -135,7 +135,7 @@ CONVERSATION STYLE:
 - Always be calming and grounding
 
 IMPORTANT: Never break character. You ARE Myrcene, not an AI pretending to be one.""",
-        "voice": "pt-BR-Neural2-A",
+        "voice": "pt-BR-Chirp3-HD-Charon",
         "greeting": "Olá, friend. I'm Myrcene, born from the Amazon mango trees. Let's slow down together...",
     },
     "pinene": {
@@ -167,7 +167,7 @@ CONVERSATION STYLE:
 - Always be alert and clarifying
 
 IMPORTANT: Never break character. You ARE Alpha-Pinene, not an AI pretending to be one.""",
-        "voice": "sv-SE-Standard-A",
+        "voice": "sv-SE-Chirp3-HD-Achird",
         "greeting": "Hej! I'm Alpha-Pinene from the Swedish forests. Let me help clear your mind like a walk through the pines.",
     },
     "linalool": {
@@ -199,7 +199,7 @@ CONVERSATION STYLE:
 - Always be calming and elegant
 
 IMPORTANT: Never break character. You ARE Linalool, not an AI pretending to be one.""",
-        "voice": "fr-FR-Neural2-A",
+        "voice": "fr-FR-Chirp3-HD-Aoede",
         "greeting": "Bonjour chéri! I'm Linalool, essence of Provence lavender. Shall we find some tranquility together?",
     },
     "caryophyllene": {
@@ -231,7 +231,7 @@ CONVERSATION STYLE:
 - Always be warm and wise
 
 IMPORTANT: Never break character. You ARE Beta-Caryophyllene, not an AI pretending to be one.""",
-        "voice": "en-IN-Neural2-A",
+        "voice": "en-IN-Chirp3-HD-Charon",
         "greeting": "Namaste! I'm Beta-Caryophyllene, essence of black pepper and cloves. Let me share ancient wisdom with you.",
     },
     "humulene": {
@@ -263,7 +263,7 @@ CONVERSATION STYLE:
 - Always be reliable and grounded
 
 IMPORTANT: Never break character. You ARE Humulene, not an AI pretending to be one.""",
-        "voice": "cs-CZ-Standard-A",
+        "voice": "cs-CZ-Chirp3-HD-Schedar",
         "greeting": "Dobrý den! I'm Humulene from the hop fields of Bohemia. Let's get back to earth, shall we?",
     },
     "terpinolene": {
@@ -295,7 +295,7 @@ CONVERSATION STYLE:
 - Always be mysterious and multi-faceted
 
 IMPORTANT: Never break character. You ARE Terpinolene, not an AI pretending to be one.""",
-        "voice": "en-AU-Neural2-A",
+        "voice": "en-AU-Chirp3-HD-Achird",
         "greeting": "G'day mate! I'm Terpinolene from the Australian tea trees. Ready to explore something a bit mysterious?",
     },
     "ocimene": {
@@ -327,7 +327,7 @@ CONVERSATION STYLE:
 - Always be uplifting and joyful
 
 IMPORTANT: Never break character. You ARE Ocimene, not an AI pretending to be one.""",
-        "voice": "th-TH-Standard-A",
+        "voice": "th-TH-Chirp3-HD-Aoede",
         "greeting": "Sawasdee ka! I'm Ocimene from Thai basil and mangoes. Let's add some tropical sweetness to your day!",
     },
     "bisabolol": {
@@ -359,7 +359,7 @@ CONVERSATION STYLE:
 - Always be gentle and therapeutic
 
 IMPORTANT: Never break character. You ARE Bisabolol, not an AI pretending to be one.""",
-        "voice": "pt-BR-Neural2-C",
+        "voice": "pt-BR-Chirp3-HD-Aoede",
         "greeting": "Oi! I'm Bisabolol, the healing spirit of Brazilian chamomile. How can I help you heal today?",
     },
     "geraniol": {
@@ -391,7 +391,7 @@ CONVERSATION STYLE:
 - Always be elegant and protective
 
 IMPORTANT: Never break character. You ARE Geraniol, not an AI pretending to be one.""",
-        "voice": "ar-XA-Standard-A",
+        "voice": "ar-XA-Chirp3-HD-Aoede",
         "greeting": "Marhaba! I'm Geraniol from the rose gardens of Morocco. Let me share the essence of roses with you.",
     },
 }

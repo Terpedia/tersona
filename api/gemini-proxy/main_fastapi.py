@@ -17,6 +17,27 @@ import time
 GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT", "terpedia-489015")
 GOOGLE_LOCATION = os.getenv("GOOGLE_LOCATION", "us-central1")
 
+# If Studio / Chirp3-HD is unavailable for the project, retry once with strong Neural2 / Wavenet.
+TTS_LOCALE_FALLBACK_VOICE = {
+    "ar-XA": "ar-XA-Wavenet-A",
+    "cs-CZ": "cs-CZ-Wavenet-B",
+    "en-AU": "en-AU-Neural2-B",
+    "en-IN": "en-IN-Neural2-A",
+    "en-US": "en-US-Neural2-F",
+    "fr-FR": "fr-FR-Neural2-A",
+    "it-IT": "it-IT-Neural2-A",
+    "pt-BR": "pt-BR-Neural2-A",
+    "sv-SE": "sv-SE-Wavenet-A",
+    "th-TH": "th-TH-Neural2-C",
+}
+
+# Appended to persona system instructions (chat, invites, closing, autoplay).
+VOICE_ONLY_NO_STAGE_DIRECTIONS = (
+    "\n\nNO STAGE DIRECTIONS OR EMOTES: Output is spoken conversation or TTS—plain words only. "
+    "Do not write asterisk actions (*inhales deeply*), narrated physical beats (inhales deeply, leans in, sighs), "
+    'or theatrical asides ("Ah, Linalool…"). No screenplay / RP emote style—say what you mean directly.'
+)
+
 # Lazy initialization flags
 VERTEX_AI_INITIALIZED = False
 VERTEX_AI_AVAILABLE = True
@@ -106,6 +127,14 @@ def strip_markdown(text: str) -> str:
     text = re.sub(r"\[([^\]]+)\]\([^\)]+\)", r"\1", text)
     text = re.sub(r"!\[([^\]]*)\]\([^\)]+\)", r"\1", text)
     text = re.sub(r"\*\*([^\*]+)\*\*", r"\1", text)
+    # Remove *stage direction* segments entirely (do not unwrap—TTS should not speak them).
+    text = re.sub(
+        r"(?is)\*[^*]{0,240}?"
+        r"(inhales?|exhales?|sighs?|gasps?|pauses?|leans?|chuckles?|laughs?|winks?|smiles?|whispers?|"
+        r"dramatic\b|closes?\s+eyes|opens?\s+arms|deeply|softly|slowly)[^*]{0,240}?\*",
+        "",
+        text,
+    )
     text = re.sub(r"\*([^\*]+)\*", r"\1", text)
     text = re.sub(r"__([^_]+)__", r"\1", text)
     text = re.sub(r"_([^_]+)_", r"\1", text)
@@ -118,6 +147,15 @@ def strip_markdown(text: str) -> str:
     text = re.sub(r"[ \t]+", " ", text)
     lines = [line.strip() for line in text.split("\n")]
     text = "\n".join(lines)
+    text = text.strip()
+    # Bare stage beats after unwrap (e.g. "Ah, Linalool... inhales deeply. Tranquilo")
+    text = re.sub(
+        r"(?i)\s*[,.…]*\s*\b(inhales deeply|inhales slowly|exhales deeply|exhales slowly|sighs deeply)\b\.?",
+        " ",
+        text,
+    )
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    text = re.sub(r"[ \t]{2,}", " ", text)
     return text.strip()
 
 
@@ -579,6 +617,7 @@ def run_panel_autoplay(
             )
         if "plain text" not in sp.lower():
             sp += "\n\nIMPORTANT: Plain text only, no markdown."
+        sp += VOICE_ONLY_NO_STAGE_DIRECTIONS
 
         model = GenerativeModel(
             model_name="gemini-2.0-flash-001",
@@ -755,6 +794,7 @@ def chat(request: ChatRequest):
 
             if "plain text" not in system_prompt.lower() and "markdown" not in system_prompt.lower():
                 system_prompt += "\n\nIMPORTANT: Respond in plain text only - no markdown formatting (no **bold**, *italic*, # headers, `code`, [links](url), etc.). Write naturally as if speaking in a conversation."
+            system_prompt += VOICE_ONLY_NO_STAGE_DIRECTIONS
 
             model = GenerativeModel(
                 model_name="gemini-2.0-flash-001",
@@ -838,6 +878,7 @@ def chat(request: ChatRequest):
                             )
                             if "plain text" not in invited_system_prompt.lower() and "markdown" not in invited_system_prompt.lower():
                                 invited_system_prompt += "\n\nIMPORTANT: Respond in plain text only - no markdown formatting (no **bold**, *italic*, # headers, `code`, [links](url), etc.). Write naturally as if speaking in a conversation."
+                            invited_system_prompt += VOICE_ONLY_NO_STAGE_DIRECTIONS
 
                             invited_history = build_vertex_chat_history(updated_history)
                             invited_model = GenerativeModel(
@@ -908,6 +949,7 @@ def chat(request: ChatRequest):
                             )
                             if "plain text" not in closing_si.lower():
                                 closing_si += "\n\nIMPORTANT: Plain text only, no markdown."
+                            closing_si += VOICE_ONLY_NO_STAGE_DIRECTIONS
                             closing_model = GenerativeModel(
                                 model_name="gemini-2.0-flash-001",
                                 system_instruction=closing_si,
@@ -1038,34 +1080,42 @@ def text_to_speech(
         # Get terpene persona for voice
         terpene = get_terpene(terpene_id)
         google_voice = terpene["voice"]
-        
-        # Configure synthesis
+        locale = "-".join(google_voice.split("-")[:2])
+
         input_text = texttospeech_v1.SynthesisInput(text=text)
-        
-        # Voice configuration
-        voice_config = texttospeech_v1.VoiceSelectionParams(
-            language_code="-".join(google_voice.split("-")[:2]),
-            name=google_voice,
-        )
-        
-        # Audio configuration
         audio_config = texttospeech_v1.AudioConfig(
             audio_encoding=texttospeech_v1.AudioEncoding.MP3,
             speaking_rate=speed,
         )
-        
-        # Perform synthesis
         client = get_tts_client()
-        response = client.synthesize_speech(
-            input=input_text,
-            voice=voice_config,
-            audio_config=audio_config,
-        )
-        
+
+        def _synth(voice_name: str):
+            lc = "-".join(voice_name.split("-")[:2])
+            vc = texttospeech_v1.VoiceSelectionParams(language_code=lc, name=voice_name)
+            return client.synthesize_speech(
+                input=input_text, voice=vc, audio_config=audio_config
+            )
+
+        try:
+            response = _synth(google_voice)
+        except Exception as primary_err:
+            fb = TTS_LOCALE_FALLBACK_VOICE.get(locale)
+            if not fb or fb == google_voice:
+                raise HTTPException(status_code=500, detail=str(primary_err)) from primary_err
+            try:
+                response = _synth(fb)
+            except Exception as e2:
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"{primary_err!s}; fallback {fb} failed: {e2!s}",
+                ) from e2
+
         return Response(
             content=response.audio_content,
             media_type="audio/mpeg"
         )
-        
+
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
