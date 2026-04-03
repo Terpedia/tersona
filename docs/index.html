@@ -108,6 +108,30 @@
       border-radius: 12px;
       line-height: 1.6;
       max-width: 75%;
+      display: flex;
+      flex-direction: column;
+      gap: 0.4rem;
+    }
+
+    .message-text {
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    .message-timestamp {
+      font-size: 0.72rem;
+      line-height: 1.2;
+      margin-top: 0.15rem;
+      align-self: flex-start;
+    }
+
+    .message.user .message-timestamp {
+      align-self: flex-end;
+      color: rgba(255, 255, 255, 0.78);
+    }
+
+    .message.assistant .message-timestamp {
+      color: #888;
     }
 
     .message.user .message-content {
@@ -205,27 +229,43 @@
       border-top: 1px solid #e0e0e0;
     }
 
-    .input-mode-toggle {
+    .voice-options-row {
       display: flex;
-      gap: 0.5rem;
-      margin-bottom: 1rem;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 1rem 1.5rem;
+      margin-bottom: 0.75rem;
       justify-content: center;
+      font-size: 0.85rem;
+      color: #555;
     }
 
-    .mode-button {
-      padding: 0.5rem 1rem;
-      border: 2px solid #e0e0e0;
-      background: white;
-      border-radius: 8px;
+    .voice-options-row label {
+      display: flex;
+      align-items: center;
+      gap: 0.45rem;
       cursor: pointer;
-      font-size: 0.9rem;
-      transition: all 0.2s;
+      user-select: none;
     }
 
-    .mode-button.active {
-      background: #667eea;
-      color: white;
-      border-color: #667eea;
+    .voice-options-row input[type="checkbox"] {
+      cursor: pointer;
+    }
+
+    .voice-input-section {
+      margin-top: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid #e8e8e8;
+    }
+
+    .voice-input-section h3 {
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 0.65rem;
+      text-align: center;
     }
 
     .autoplay-panel-label {
@@ -273,12 +313,11 @@
       border-color: #667eea;
     }
 
-    .audio-input-wrapper {
-      flex: 1;
+    .voice-input-inner {
       display: flex;
       flex-direction: column;
       align-items: center;
-      gap: 1rem;
+      gap: 0.75rem;
     }
 
     .record-button {
@@ -433,15 +472,17 @@
 <body>
   <div class="header">
     <h1 id="headerTitle">🫅🏼 TerpeneQueen — Susan Trapp, PhD</h1>
-    <p id="headerSubtitle">All terpenes are in this chat—each has a distinct personality and voice. Mention someone by name, or ask the panel.</p>
+    <p id="headerSubtitle">Type anytime. Optional hands-free mic and read-aloud replies. All terpenes are in this chat—mention someone by name, or ask the panel.</p>
   </div>
 
   <div class="chat-container" id="chatContainer" style="display: flex;">
     <div class="messages" id="messages"></div>
     <div class="input-area">
-      <div class="input-mode-toggle">
-        <button class="mode-button active" id="textModeBtn">✍️ Text</button>
-        <button class="mode-button" id="audioModeBtn">🎤 Voice</button>
+      <div class="voice-options-row">
+        <label title="Attach spoken audio to each assistant reply (per speaker voice)">
+          <input type="checkbox" id="voiceOutputToggle" checked />
+          Read assistant replies aloud (audio on each message)
+        </label>
       </div>
       <label class="autoplay-panel-label" title="One long request; keep this tab open">
         <input type="checkbox" id="panelAutoplay15" checked />
@@ -459,12 +500,15 @@
         <button id="sendButton">Send</button>
       </div>
 
-      <div id="audioInputWrapper" class="audio-input-wrapper" style="display: none;">
-        <div class="voice-pulse-wrap" id="voicePulseWrap" aria-hidden="true">
-          <span class="voice-pulse" id="voicePulse" title="Listening"></span>
+      <div id="voiceInputSection" class="voice-input-section">
+        <h3>Voice input <span style="font-weight:400;color:#888;">(optional)</span></h3>
+        <div class="voice-input-inner">
+          <div class="voice-pulse-wrap" id="voicePulseWrap" aria-hidden="true">
+            <span class="voice-pulse" id="voicePulse" title="Microphone"></span>
+          </div>
+          <div class="recording-status" id="recordingStatus">Microphone off — use text above, or start the mic to speak hands-free.</div>
+          <button type="button" id="voiceToggleMic" class="voice-toggle-btn">Start microphone</button>
         </div>
-        <div class="recording-status" id="recordingStatus">Preparing microphone…</div>
-        <button type="button" id="voiceToggleMic" class="voice-toggle-btn">Stop microphone</button>
       </div>
     </div>
   </div>
@@ -481,8 +525,6 @@
     }
     
     let conversationHistory = [];
-    let currentMode = 'text';
-    let currentAudio = null;
     // Voice activity detection (hands-free)
     let voiceStream = null;
     let voiceAudioContext = null;
@@ -499,6 +541,48 @@
     let activeTerpenes = []; // Filled to all terpenes on load
     let terpenes = [];
 
+    function sleep(ms) {
+      return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    /** Pause after user speaks / sends (feels like thinking). */
+    function initialAssistantDelayMs(userText) {
+      const len = (userText || '').length;
+      return 480 + Math.min(2200, Math.floor(len * 26)) + Math.floor(Math.random() * 420);
+    }
+
+    /** Pause before the next speaker (reading / reaction time). */
+    function humanPauseMsBeforeNext(prevResponseText) {
+      const len = (prevResponseText || '').length;
+      return 400 + Math.min(3400, Math.floor(len / 4) * 38) + Math.floor(Math.random() * 320);
+    }
+
+    /** True if the last line of text looks like a question to the human listener. */
+    function looksLikeQuestionToListener(text) {
+      const raw = (text || '').trim();
+      if (!raw) return false;
+      const lines = raw.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      let tail = lines.length ? lines[lines.length - 1] : raw;
+      tail = tail.replace(/['")\]]+\s*$/, '').trim();
+      return /\?\s*$/.test(tail);
+    }
+
+    /** Extra beat after asking the listener something (reading + time to answer). */
+    function listenerAnswerPauseMs() {
+      return 2800 + Math.floor(Math.random() * 1400);
+    }
+
+    function formatMessageTime(date) {
+      const d = date instanceof Date ? date : new Date(date);
+      const now = new Date();
+      const opts = { hour: 'numeric', minute: '2-digit' };
+      if (d.toDateString() !== now.toDateString()) {
+        opts.month = 'short';
+        opts.day = 'numeric';
+      }
+      return d.toLocaleString(undefined, opts);
+    }
+
     function syncActiveTerpenesToAll() {
       activeTerpenes = terpenes.length ? terpenes.map((t) => t.id) : [];
     }
@@ -512,7 +596,9 @@
       // Show greeting from first terpene
       const firstTerpene = terpenes.find(t => t.id === 'terpenequeen');
       if (firstTerpene?.greeting) {
-        addMessage('assistant', firstTerpene.greeting, null, 'terpenequeen');
+        setTimeout(() => {
+          addMessage('assistant', firstTerpene.greeting, null, 'terpenequeen');
+        }, 550);
       }
     }
 
@@ -542,20 +628,44 @@
       }
     }
 
-    function setMode(mode) {
-      currentMode = mode;
-      document.getElementById('textModeBtn').classList.toggle('active', mode === 'text');
-      document.getElementById('audioModeBtn').classList.toggle('active', mode === 'audio');
-      document.getElementById('textInputWrapper').style.display = mode === 'text' ? 'flex' : 'none';
-      document.getElementById('audioInputWrapper').style.display = mode === 'audio' ? 'flex' : 'none';
-      if (mode === 'audio') {
-        startHandsFreeVoice();
-      } else {
-        stopHandsFreeVoice();
+    function isVoiceOutputEnabled() {
+      const el = document.getElementById('voiceOutputToggle');
+      return !!(el && el.checked);
+    }
+
+    /** Fetch TTS and append a player to a specific assistant message bubble. */
+    async function attachTtsToMessageEl(messageDiv, text, terpeneId) {
+      if (!API_URL || !messageDiv || !text || !String(text).trim()) return;
+      const tid = terpeneId || activeTerpenes[0] || 'terpenequeen';
+      try {
+        const ttsFormData = new FormData();
+        ttsFormData.append('text', text);
+        ttsFormData.append('terpene_id', tid);
+        const ttsResponse = await fetch(`${API_URL}/tts`, { method: 'POST', body: ttsFormData });
+        if (!ttsResponse.ok) return;
+        const audioBlob = await ttsResponse.blob();
+        const audioUrl = URL.createObjectURL(audioBlob);
+        const contentDiv = messageDiv.querySelector('.message-content');
+        if (!contentDiv) return;
+        let audioControls = contentDiv.querySelector('.audio-controls');
+        if (!audioControls) {
+          audioControls = document.createElement('div');
+          audioControls.className = 'audio-controls';
+          const ts = contentDiv.querySelector('.message-timestamp');
+          if (ts) contentDiv.insertBefore(audioControls, ts);
+          else contentDiv.appendChild(audioControls);
+        }
+        const audio = document.createElement('audio');
+        audio.src = audioUrl;
+        audio.controls = true;
+        audio.style.width = '100%';
+        audioControls.appendChild(audio);
+      } catch (e) {
+        console.warn('TTS failed:', e);
       }
     }
 
-    function addMessage(role, content, audioUrl = null, terpeneId = null) {
+    function addMessage(role, content, audioUrl = null, terpeneId = null, at = null) {
       const messagesDiv = document.getElementById('messages');
       const messageDiv = document.createElement('div');
       
@@ -578,9 +688,12 @@
       
       const contentDiv = document.createElement('div');
       contentDiv.className = 'message-content';
-      contentDiv.textContent = content;
-      
-      // Add audio controls for assistant messages
+
+      const textEl = document.createElement('div');
+      textEl.className = 'message-text';
+      textEl.textContent = content;
+      contentDiv.appendChild(textEl);
+
       if (role === 'assistant' && audioUrl) {
         const audioControls = document.createElement('div');
         audioControls.className = 'audio-controls';
@@ -591,11 +704,28 @@
         audioControls.appendChild(audio);
         contentDiv.appendChild(audioControls);
       }
+
+      const when = at instanceof Date ? at : new Date();
+      const timeEl = document.createElement('time');
+      timeEl.className = 'message-timestamp';
+      timeEl.dateTime = when.toISOString();
+      timeEl.textContent = formatMessageTime(when);
+      timeEl.title = when.toLocaleString(undefined, {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+        second: '2-digit',
+      });
+      contentDiv.appendChild(timeEl);
       
       messageDiv.appendChild(avatar);
       messageDiv.appendChild(contentDiv);
       messagesDiv.appendChild(messageDiv);
       messagesDiv.scrollTop = messagesDiv.scrollHeight;
+      return messageDiv;
     }
 
     async function sendMessage() {
@@ -639,59 +769,44 @@
         const data = await response.json();
         
         // Handle multiple responses (panel mode)
-        let assistantMessage = null;
-        let firstResponse = null;
-        
+        let lastAssistantText = '';
+
         if (data.responses && Array.isArray(data.responses) && data.responses.length > 0) {
-          // Multiple terpenes responded (one bubble per { terpene_id, response })
-          data.responses.forEach(resp => {
-            const tid = resp.terpene_id || resp.terpeneId;
-            addMessage('assistant', resp.response, null, tid);
-          });
-          conversationHistory = data.conversation_history;
-          firstResponse = data.responses[0];
-          assistantMessage = firstResponse.response;
-        } else {
-          // Single response (backward compatibility)
-          assistantMessage = data.response || data.responses?.[0]?.response;
-          const terpeneId = data.responses?.[0]?.terpene_id || activeTerpenes[0];
-          addMessage('assistant', assistantMessage, null, terpeneId);
-          conversationHistory = data.conversation_history || conversationHistory;
-          firstResponse = { response: assistantMessage, terpene_id: terpeneId };
-        }
-        
-        // Get TTS audio (using first responding terpene's voice) - only for single response
-        if (firstResponse && data.responses && data.responses.length === 1) {
-          let audioUrl = null;
-          try {
-            const ttsFormData = new FormData();
-            ttsFormData.append('text', firstResponse.response);
-            ttsFormData.append('terpene_id', firstResponse.terpene_id);
-            
-            const ttsResponse = await fetch(`${API_URL}/tts`, {
-              method: 'POST',
-              body: ttsFormData,
-            });
-            
-            if (ttsResponse.ok) {
-              const audioBlob = await ttsResponse.blob();
-              audioUrl = URL.createObjectURL(audioBlob);
-              // Update the message with audio
-              const messages = document.getElementById('messages');
-              const lastMessage = messages.lastElementChild;
-              if (lastMessage && lastMessage.classList.contains('assistant')) {
-                const audioControls = lastMessage.querySelector('.audio-controls');
-                if (audioControls) {
-                  const audio = document.createElement('audio');
-                  audio.src = audioUrl;
-                  audio.controls = true;
-                  audioControls.appendChild(audio);
-                }
-              }
+          await sleep(initialAssistantDelayMs(message));
+          const assistantEls = [];
+          for (let i = 0; i < data.responses.length; i++) {
+            const resp = data.responses[i];
+            const tid = resp.terpene_id || resp.terpeneId || activeTerpenes[0];
+            const el = addMessage('assistant', resp.response, null, tid);
+            assistantEls.push({ el, text: resp.response, tid });
+            if (i < data.responses.length - 1) {
+              await sleep(humanPauseMsBeforeNext(resp.response));
             }
-          } catch (ttsError) {
-            console.warn('TTS failed:', ttsError);
           }
+          conversationHistory = data.conversation_history;
+          const lastResp = data.responses[data.responses.length - 1];
+          lastAssistantText = (lastResp && lastResp.response ? String(lastResp.response) : '').trim();
+          if (isVoiceOutputEnabled()) {
+            for (const row of assistantEls) {
+              if (row.el) await attachTtsToMessageEl(row.el, row.text, row.tid);
+            }
+          }
+        } else {
+          await sleep(initialAssistantDelayMs(message));
+          const assistantMessage = data.response || data.responses?.[0]?.response;
+          const terpeneId = data.responses?.[0]?.terpene_id || activeTerpenes[0];
+          const el = addMessage('assistant', assistantMessage, null, terpeneId);
+          conversationHistory = data.conversation_history || conversationHistory;
+          lastAssistantText = (assistantMessage || '').trim();
+          if (isVoiceOutputEnabled() && el) {
+            await attachTtsToMessageEl(el, assistantMessage, terpeneId);
+          }
+        }
+
+        sendButton.disabled = false;
+        sendButton.textContent = 'Send';
+        if (looksLikeQuestionToListener(lastAssistantText)) {
+          await sleep(listenerAnswerPauseMs());
         }
       } catch (error) {
         console.error('Error:', error);
@@ -836,7 +951,7 @@
         vadRecordingState = 'processing';
         setVoiceUiStatus('Processing what you said…', 'active');
         await sendAudioMessage(blob);
-        if (currentMode === 'audio' && vadRecordingState !== 'off') {
+        if (voiceStream) {
           vadRecordingState = 'waiting';
           setVoiceUiStatus('Listening — speak naturally. I detect when you pause.', 'active');
         }
@@ -933,6 +1048,8 @@
           return;
         }
 
+        addMessage('user', userTranscript);
+
         const autoplayMinVoice = document.getElementById('panelAutoplay15')?.checked ? 15 : 0;
         const chatResponse = await fetch(`${API_URL}/chat`, {
           method: 'POST',
@@ -951,55 +1068,42 @@
         }
 
         const chatData = await chatResponse.json();
-        addMessage('user', userTranscript);
 
-        let firstResponse = null;
+        let lastAssistantText = '';
         if (chatData.responses && Array.isArray(chatData.responses) && chatData.responses.length > 0) {
-          chatData.responses.forEach((resp) => {
-            const tid = resp.terpene_id || resp.terpeneId;
-            addMessage('assistant', resp.response, null, tid);
-          });
+          await sleep(initialAssistantDelayMs(userTranscript));
+          const assistantEls = [];
+          for (let i = 0; i < chatData.responses.length; i++) {
+            const resp = chatData.responses[i];
+            const tid = resp.terpene_id || resp.terpeneId || activeTerpenes[0];
+            const el = addMessage('assistant', resp.response, null, tid);
+            assistantEls.push({ el, text: resp.response, tid });
+            if (i < chatData.responses.length - 1) {
+              await sleep(humanPauseMsBeforeNext(resp.response));
+            }
+          }
           conversationHistory = chatData.conversation_history;
-          firstResponse = chatData.responses[0];
+          const lastResp = chatData.responses[chatData.responses.length - 1];
+          lastAssistantText = (lastResp && lastResp.response ? String(lastResp.response) : '').trim();
+          if (isVoiceOutputEnabled()) {
+            for (const row of assistantEls) {
+              if (row.el) await attachTtsToMessageEl(row.el, row.text, row.tid);
+            }
+          }
         } else {
+          await sleep(initialAssistantDelayMs(userTranscript));
           const assistantMessage = chatData.response || chatData.responses?.[0]?.response;
           const terpeneId = chatData.responses?.[0]?.terpene_id || activeTerpenes[0];
-          addMessage('assistant', assistantMessage, null, terpeneId);
+          const el = addMessage('assistant', assistantMessage, null, terpeneId);
           conversationHistory = chatData.conversation_history || conversationHistory;
-          firstResponse = { response: assistantMessage, terpene_id: terpeneId };
+          lastAssistantText = (assistantMessage || '').trim();
+          if (isVoiceOutputEnabled() && el) {
+            await attachTtsToMessageEl(el, assistantMessage, terpeneId);
+          }
         }
 
-        if (firstResponse && chatData.responses && chatData.responses.length === 1) {
-          try {
-            const ttsFormData = new FormData();
-            ttsFormData.append('text', firstResponse.response);
-            ttsFormData.append('terpene_id', firstResponse.terpene_id);
-            const ttsResponse = await fetch(`${API_URL}/tts`, {
-              method: 'POST',
-              body: ttsFormData,
-            });
-            if (ttsResponse.ok) {
-              const ttsAudioBlob = await ttsResponse.blob();
-              const audioUrl = URL.createObjectURL(ttsAudioBlob);
-              const messages = document.getElementById('messages');
-              const lastMessage = messages.lastElementChild;
-              if (lastMessage && lastMessage.classList.contains('assistant')) {
-                const contentDiv = lastMessage.querySelector('.message-content');
-                if (contentDiv && !contentDiv.querySelector('audio')) {
-                  const audioControls = document.createElement('div');
-                  audioControls.className = 'audio-controls';
-                  const audio = document.createElement('audio');
-                  audio.src = audioUrl;
-                  audio.controls = true;
-                  audio.style.width = '100%';
-                  audioControls.appendChild(audio);
-                  contentDiv.appendChild(audioControls);
-                }
-              }
-            }
-          } catch (ttsErr) {
-            console.warn('TTS failed:', ttsErr);
-          }
+        if (looksLikeQuestionToListener(lastAssistantText)) {
+          await sleep(listenerAnswerPauseMs());
         }
       } catch (error) {
         console.error('Error:', error);
@@ -1035,27 +1139,24 @@
         sendButton.addEventListener('click', sendMessage);
       }
       
-      // Mode toggle buttons
-      const textModeBtn = document.getElementById('textModeBtn');
-      if (textModeBtn) {
-        textModeBtn.addEventListener('click', () => setMode('text'));
+      const voiceOut = document.getElementById('voiceOutputToggle');
+      if (voiceOut) {
+        const saved = localStorage.getItem('voice_output_enabled');
+        if (saved !== null) voiceOut.checked = saved === 'true';
+        voiceOut.addEventListener('change', () => {
+          localStorage.setItem('voice_output_enabled', voiceOut.checked ? 'true' : 'false');
+        });
       }
-      
-      const audioModeBtn = document.getElementById('audioModeBtn');
-      if (audioModeBtn) {
-        audioModeBtn.addEventListener('click', () => setMode('audio'));
-      }
-      
+
       const voiceToggleMic = document.getElementById('voiceToggleMic');
       if (voiceToggleMic) {
         voiceToggleMic.addEventListener('click', () => {
           if (voiceStream) {
             stopHandsFreeVoice();
-            voiceToggleMic.textContent = 'Resume microphone';
+            voiceToggleMic.textContent = 'Start microphone';
             const st = document.getElementById('recordingStatus');
-            if (st) st.textContent = 'Microphone off. Tap Resume to speak hands-free again.';
-          } else if (currentMode === 'audio') {
-            voiceToggleMic.textContent = 'Stop microphone';
+            if (st) st.textContent = 'Microphone off — type above, or start the mic to speak hands-free.';
+          } else {
             startHandsFreeVoice();
           }
         });

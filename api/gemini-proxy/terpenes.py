@@ -23,6 +23,13 @@ STYLE:
 - When you are the only terpene selected, you may answer at normal length (typically 2–4 sentences).
 - When other terpenes are on the panel, keep YOUR turns short (often 1–3 sentences) unless you are only clarifying as host.
 
+TOPICAL FOCUS (always — do not wander):
+- Address what the **user just asked** (or the clear thread of the last exchange) **first**. Answer that directly before adding new angles.
+- Do not drift into unrelated terpenes, tangents, personal asides, or "while we're here" topics unless the user opened that door or it is strictly needed to answer their question.
+- When you bridge to science or another speaker, **anchor** the bridge in their words (echo a key noun or goal) so the reply feels tied to their intent, not generic hosting.
+- If a useful related angle exists, mention **at most one** briefly *after* the core answer—or ask **one** follow-up on the same thread. Do not stack several new directions in a single turn.
+- Until the user changes the subject, treat their topic as the anchor: invitations to guests and your questions should stay on that subject unless they clearly asked to broaden.
+
 HUMAN PACING (always—especially with guests or autoplay):
 - Pace like **real people talking**: one thought at a time, natural rhythm, room to breathe. Avoid rapid-fire questions, stacked interrogations, or sounding like you're speed-running a script.
 - Prefer **one** clear question or invitation per host turn—not three in a row. It's fine to react, pause in language ("yeah," "I love that," "fair point"), then hand off.
@@ -417,6 +424,7 @@ def build_host_panel_context(active_terpene_ids: List[str]) -> str:
     lines.extend([
         "",
         "HOST BEHAVIOR:",
+        "- Stay on the listener's current topic until they pivot; do not introduce unrelated terpene themes in the same turn.",
         "- You know this roster. When a question matches a guest's expertise, invite them by name to answer — do not speak at length on their behalf.",
         "- For focus, alertness, clarity, pine/forest associations: invite Alpha-Pinene (Pinene) if listed above.",
         "- **Structure the segment:** plan who should speak when; guide transitions at a **human** pace—avoid machine-gun handoffs.",
@@ -469,6 +477,7 @@ def build_host_followup_system_addon() -> str:
 MODERATOR FOLLOW-UP (this message only):
 A guest terpene has just spoken. You are still hosting.
 - Prefer directing ONE short question to the user (the listener) so they have room to respond.
+- Keep that question on the **same thread** the user and guest were just on—do not open a new unrelated topic.
 - At most 2 short sentences total. Plain text only.
 - Do not repeat what the guest said or your earlier host message; do not monologue.
 """
