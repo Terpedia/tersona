@@ -573,7 +573,7 @@
           Autoplay voice replies (tap ▶ on each message if sound does not start)
         </label>
       </div>
-      <label class="autoplay-panel-label" title="One long request; keep this tab open">
+      <label class="autoplay-panel-label" title="Replies stream in as each line is generated; you can send a follow-up anytime—the in-flight stream stops. Long autoplay still uses one server session.">
         <input type="checkbox" id="panelAutoplay15" checked />
         Panel keeps talking ~15 minutes (autoplay)
       </label>
@@ -641,6 +641,7 @@
     let maxRecordingTimer = null;
     let activeTerpenes = []; // Filled to all terpenes on load
     let terpenes = [];
+    let activeChatAbortController = null;
 
     /** TTS clips play one-after-another (panel); avoids overlap and helps autoplay after async fetch. */
     let ttsPlayQueue = [];
@@ -735,6 +736,127 @@
 
     function sleep(ms) {
       return new Promise((resolve) => setTimeout(resolve, ms));
+    }
+
+    /**
+     * Parse Server-Sent Events from a fetch Response body (POST /chat/stream).
+     * Calls onEvent for each JSON payload; onEvent may return a Promise.
+     */
+    async function consumeChatEventStream(response, onEvent) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let sep;
+        while ((sep = buf.indexOf('\n\n')) >= 0) {
+          const block = buf.slice(0, sep).trim();
+          buf = buf.slice(sep + 2);
+          if (!block) continue;
+          const lines = block.split('\n').filter((l) => l.startsWith('data:'));
+          if (!lines.length) continue;
+          const raw = lines.map((l) => l.replace(/^data:\s?/, '')).join('\n').trim();
+          if (!raw) continue;
+          let ev;
+          try {
+            ev = JSON.parse(raw);
+          } catch (_) {
+            continue;
+          }
+          const ret = onEvent(ev);
+          if (ret && typeof ret.then === 'function') await ret;
+        }
+      }
+    }
+
+    /**
+     * Stream assistant messages as they are generated; supports AbortSignal for new sends.
+     * @param {string} userText
+     * @param {object[]} historyForApi conversation_history **without** this user turn (server appends it).
+     */
+    async function runChatWithStream(userText, historyForApi) {
+      if (!API_URL) throw new Error('API URL not configured. Please enter your Cloud Function URL.');
+
+      const autoplayMin = document.getElementById('panelAutoplay15')?.checked ? 15 : 0;
+      const timeoutMs = autoplayMin > 0 ? 970000 : 180000;
+
+      activeChatAbortController?.abort();
+      const ctrl = new AbortController();
+      activeChatAbortController = ctrl;
+      const timeoutId = setTimeout(() => ctrl.abort(), timeoutMs);
+
+      const rollingHistory = [...(historyForApi || []), { role: 'user', content: userText }];
+      let assistantIndex = 0;
+      let lastAssistantText = '';
+      let streamError = null;
+
+      try {
+        const res = await fetch(`${API_URL}/chat/stream`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'text/event-stream',
+          },
+          body: JSON.stringify({
+            message: userText,
+            active_terpenes: activeTerpenes,
+            conversation_history: historyForApi || [],
+            autoplay_panel_minutes: autoplayMin,
+          }),
+          signal: ctrl.signal,
+        });
+
+        if (!res.ok) {
+          let detail = await res.text();
+          try {
+            const j = JSON.parse(detail);
+            detail = j.detail || detail;
+          } catch (_) {}
+          throw new Error(detail || `Request failed (${res.status})`);
+        }
+
+        await consumeChatEventStream(res, async (ev) => {
+          const t = ev && ev.type;
+          if (t === 'assistant') {
+            const tid = ev.terpene_id || activeTerpenes[0];
+            const text = ev.response;
+            if (assistantIndex === 0) {
+              stopThinkingStatus();
+              await sleep(Math.min(380, Math.max(90, Math.floor(initialAssistantDelayMs(userText) / 3))));
+            } else {
+              await sleep(humanPauseMsBeforeNext(lastAssistantText));
+            }
+            const el = addMessage('assistant', text, null, tid);
+            rollingHistory.push({ role: 'assistant', content: text, terpene_id: tid });
+            conversationHistory = rollingHistory.map((m) => ({ ...m }));
+            lastAssistantText = String(text || '').trim();
+            assistantIndex += 1;
+            if (el) await attachTtsToMessageEl(el, text, tid);
+          } else if (t === 'done') {
+            if (Array.isArray(ev.conversation_history)) {
+              conversationHistory = ev.conversation_history;
+            } else {
+              conversationHistory = rollingHistory;
+            }
+          } else if (t === 'error') {
+            streamError = ev.detail || 'Stream error';
+          }
+        });
+
+        if (streamError) throw new Error(streamError);
+      } catch (e) {
+        if (e && e.name === 'AbortError') {
+          return { aborted: true, lastAssistantText };
+        }
+        throw e;
+      } finally {
+        clearTimeout(timeoutId);
+        if (activeChatAbortController === ctrl) activeChatAbortController = null;
+      }
+
+      return { aborted: false, lastAssistantText };
     }
 
     /** Pause after user speaks / sends (feels like thinking). */
@@ -1060,7 +1182,9 @@
 
       primeAudioPlaybackUnlock();
 
+      const historyForApi = [...conversationHistory];
       addMessage('user', message);
+      conversationHistory = [...historyForApi, { role: 'user', content: message }];
       input.value = '';
       input.style.height = 'auto';
 
@@ -1069,75 +1193,17 @@
       sendButton.innerHTML = '<span class="loading"></span>';
       startThinkingStatus();
 
-      const autoplayMin = document.getElementById('panelAutoplay15')?.checked ? 15 : 0;
-
       try {
-        if (!API_URL) {
-          throw new Error('API URL not configured. Please enter your Cloud Function URL.');
-        }
-        const response = await fetch(`${API_URL}/chat`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            message: message,
-            active_terpenes: activeTerpenes,
-            conversation_history: conversationHistory,
-            autoplay_panel_minutes: autoplayMin,
-          }),
-          signal: AbortSignal.timeout(autoplayMin > 0 ? 970000 : 180000),
-        });
-
-        if (!response.ok) {
-          const error = await response.json();
-          throw new Error(error.detail || 'Failed to get response');
-        }
-
-        const data = await response.json();
-        
-        // Handle multiple responses (panel mode)
-        let lastAssistantText = '';
-
-        if (data.responses && Array.isArray(data.responses) && data.responses.length > 0) {
-          await sleep(initialAssistantDelayMs(message));
-          stopThinkingStatus();
-          const assistantEls = [];
-          for (let i = 0; i < data.responses.length; i++) {
-            const resp = data.responses[i];
-            const tid = resp.terpene_id || resp.terpeneId || activeTerpenes[0];
-            const el = addMessage('assistant', resp.response, null, tid);
-            assistantEls.push({ el, text: resp.response, tid });
-            if (i < data.responses.length - 1) {
-              await sleep(humanPauseMsBeforeNext(resp.response));
-            }
-          }
-          conversationHistory = data.conversation_history;
-          const lastResp = data.responses[data.responses.length - 1];
-          lastAssistantText = (lastResp && lastResp.response ? String(lastResp.response) : '').trim();
-          for (const row of assistantEls) {
-            if (row.el) await attachTtsToMessageEl(row.el, row.text, row.tid);
-          }
-        } else {
-          await sleep(initialAssistantDelayMs(message));
-          stopThinkingStatus();
-          const assistantMessage = data.response || data.responses?.[0]?.response;
-          const terpeneId = data.responses?.[0]?.terpene_id || activeTerpenes[0];
-          const el = addMessage('assistant', assistantMessage, null, terpeneId);
-          conversationHistory = data.conversation_history || conversationHistory;
-          lastAssistantText = (assistantMessage || '').trim();
-          if (el) await attachTtsToMessageEl(el, assistantMessage, terpeneId);
-        }
-
-        sendButton.disabled = false;
-        sendButton.textContent = 'Send';
-        if (looksLikeQuestionToListener(lastAssistantText)) {
+        const result = await runChatWithStream(message, historyForApi);
+        if (!result.aborted && looksLikeQuestionToListener(result.lastAssistantText)) {
           await sleep(listenerAnswerPauseMs());
         }
       } catch (error) {
-        console.error('Error:', error);
-        stopThinkingStatus();
-        addMessage('assistant', `Sorry, I encountered an error: ${error.message}. Please check your API URL and try again.`);
+        if (!(error && error.name === 'AbortError')) {
+          console.error('Error:', error);
+          stopThinkingStatus();
+          addMessage('assistant', `Sorry, I encountered an error: ${error.message}. Please check your API URL and try again.`);
+        }
       } finally {
         stopThinkingStatus();
         sendButton.disabled = false;
@@ -1380,66 +1446,29 @@
           return;
         }
 
+        const historyForApiVoice = [...conversationHistory];
         addMessage('user', userTranscript);
+        conversationHistory = [...historyForApiVoice, { role: 'user', content: userTranscript }];
 
-        const autoplayMinVoice = document.getElementById('panelAutoplay15')?.checked ? 15 : 0;
-        const chatResponse = await fetch(`${API_URL}/chat`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            message: userTranscript,
-            active_terpenes: activeTerpenes,
-            conversation_history: conversationHistory,
-            autoplay_panel_minutes: autoplayMinVoice,
-          }),
-          signal: AbortSignal.timeout(autoplayMinVoice > 0 ? 970000 : 180000),
-        });
-
-        if (!chatResponse.ok) {
-          throw new Error('Chat request failed');
-        }
-
-        const chatData = await chatResponse.json();
-
-        let lastAssistantText = '';
-        if (chatData.responses && Array.isArray(chatData.responses) && chatData.responses.length > 0) {
-          await sleep(initialAssistantDelayMs(userTranscript));
-          stopThinkingStatus();
-          const assistantEls = [];
-          for (let i = 0; i < chatData.responses.length; i++) {
-            const resp = chatData.responses[i];
-            const tid = resp.terpene_id || resp.terpeneId || activeTerpenes[0];
-            const el = addMessage('assistant', resp.response, null, tid);
-            assistantEls.push({ el, text: resp.response, tid });
-            if (i < chatData.responses.length - 1) {
-              await sleep(humanPauseMsBeforeNext(resp.response));
-            }
+        try {
+          const result = await runChatWithStream(userTranscript, historyForApiVoice);
+          if (!result.aborted && looksLikeQuestionToListener(result.lastAssistantText)) {
+            await sleep(listenerAnswerPauseMs());
           }
-          conversationHistory = chatData.conversation_history;
-          const lastResp = chatData.responses[chatData.responses.length - 1];
-          lastAssistantText = (lastResp && lastResp.response ? String(lastResp.response) : '').trim();
-          for (const row of assistantEls) {
-            if (row.el) await attachTtsToMessageEl(row.el, row.text, row.tid);
+        } catch (chatErr) {
+          if (!(chatErr && chatErr.name === 'AbortError')) {
+            throw chatErr;
           }
-        } else {
-          await sleep(initialAssistantDelayMs(userTranscript));
-          stopThinkingStatus();
-          const assistantMessage = chatData.response || chatData.responses?.[0]?.response;
-          const terpeneId = chatData.responses?.[0]?.terpene_id || activeTerpenes[0];
-          const el = addMessage('assistant', assistantMessage, null, terpeneId);
-          conversationHistory = chatData.conversation_history || conversationHistory;
-          lastAssistantText = (assistantMessage || '').trim();
-          if (el) await attachTtsToMessageEl(el, assistantMessage, terpeneId);
-        }
-
-        if (looksLikeQuestionToListener(lastAssistantText)) {
-          await sleep(listenerAnswerPauseMs());
         }
       } catch (error) {
-        console.error('Error:', error);
-        stopThinkingStatus();
-        addMessage('assistant', `Sorry, I encountered an error: ${error.message}. Please try again.`);
-        setVoiceUiStatus('Error — speak again when ready.', 'active');
+        if (error && error.name === 'AbortError') {
+          // Superseded by a newer chat request (e.g. typed follow-up while streaming).
+        } else {
+          console.error('Error:', error);
+          stopThinkingStatus();
+          addMessage('assistant', `Sorry, I encountered an error: ${error.message}. Please try again.`);
+          setVoiceUiStatus('Error — speak again when ready.', 'active');
+        }
       } finally {
         stopThinkingStatus();
       }

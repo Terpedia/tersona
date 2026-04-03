@@ -69,7 +69,7 @@ class _VirtualClock:
 
 
 class _FakeGenerativeModel:
-    """Minimal stand-in for vertexai GenerativeModel used inside run_panel_autoplay."""
+    """Minimal stand-in for vertexai GenerativeModel used inside iter_panel_autoplay."""
 
     clk: _VirtualClock
     per_turn_seconds: float
@@ -89,7 +89,7 @@ class _FakeGenerativeModel:
         return _FakeResp()
 
 
-def test_run_panel_autoplay_full_15_minute_budget() -> None:
+def test_iter_panel_autoplay_full_15_minute_budget() -> None:
     """
     With max_turns=240 and 15*60s budget, each turn advances time by 3.75s so
     240 turns land exactly at 900s and the loop exits on time (not max_turns early).
@@ -112,13 +112,13 @@ def test_run_panel_autoplay_full_15_minute_budget() -> None:
     # Avoid importing vertexai Content types in this unit test.
     with mock.patch.object(mf.time, "monotonic", clk.monotonic):
         with mock.patch.object(mf, "build_vertex_chat_history", return_value=[]):
-            mf.run_panel_autoplay(
+            for piece in mf.iter_panel_autoplay(
                 FM,
                 guests,
                 history,
-                responses,
-                autoplay_minutes=15.0,
-            )
+                15.0,
+            ):
+                responses.append(piece)
 
     assert len(responses) == 240, f"expected 240 autoplay turns, got {len(responses)}"
     assert clk.t >= 900.0, f"virtual elapsed {clk.t}s should reach 900s budget"
@@ -190,8 +190,8 @@ def main() -> int:
     test_chat_request_autoplay_cap()
     print("ok: ChatRequest accepts 15.0 and rejects >15")
 
-    test_run_panel_autoplay_full_15_minute_budget()
-    print("ok: run_panel_autoplay fills full 15-minute virtual budget (240 turns @ 3.75s)")
+    test_iter_panel_autoplay_full_15_minute_budget()
+    print("ok: iter_panel_autoplay fills full 15-minute virtual budget (240 turns @ 3.75s)")
 
     if args.live_url:
         live_smoke_post(args.live_url, args.live_minutes, args.live_timeout)

@@ -4,9 +4,9 @@ Uses service account authentication (no API key needed)
 """
 from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response, JSONResponse
+from fastapi.responses import Response, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from typing import List, Dict, Optional
+from typing import Any, Dict, Iterator, List, Optional
 import asyncio
 import os
 import json
@@ -546,14 +546,13 @@ def _autoplay_next_speaker(updated_history: List[Dict], guests: List[str]) -> Op
     return "terpenequeen"
 
 
-def run_panel_autoplay(
+def iter_panel_autoplay(
     GenerativeModel,
     active_terpenes: List[str],
     updated_history: List[Dict],
-    responses: List[Dict[str, str]],
     autoplay_minutes: float,
-) -> None:
-    """Append alternating host/guest turns until time budget (mutates history and responses)."""
+) -> Iterator[Dict[str, str]]:
+    """Yield {terpene_id, response} per turn; mutates updated_history (same as former run_panel_autoplay)."""
     guests = _panel_guests(active_terpenes)
     has_tq = any(t.lower() == "terpenequeen" for t in active_terpenes)
     if not guests or not has_tq or autoplay_minutes <= 0:
@@ -639,9 +638,9 @@ def run_panel_autoplay(
             if not txt:
                 break
             txt = strip_markdown(txt)
-            responses.append({"terpene_id": next_id, "response": txt})
             updated_history.append({"role": "assistant", "content": txt, "terpene_id": next_id})
             turns += 1
+            yield {"terpene_id": next_id, "response": txt}
         except Exception as e:
             print(f"DEBUG: panel autoplay stopped: {e}")
             break
@@ -664,81 +663,15 @@ class ChatResponse(BaseModel):
     conversation_history: List[Dict[str, str]]
 
 
-@app.get("/health")
-async def health():
-    """Health check"""
-    return {"status": "ok", "service": "terpene-api"}
+def _sse_line(obj: Dict[str, Any]) -> bytes:
+    return f"data: {json.dumps(obj, ensure_ascii=False)}\n\n".encode("utf-8")
 
 
-@app.get("/warm")
-def warm():
+def iter_chat_events(request: ChatRequest) -> Iterator[Dict[str, Any]]:
     """
-    Wake Cloud Run, initialize Vertex, and optionally run a tiny LLM call so the first
-    real /chat is faster. Safe to call from the browser on page load (idempotent).
-
-    Implemented as a **sync** route so FastAPI runs it in a thread pool; Vertex
-    `generate_content` is blocking and must not run on the asyncio event loop (that
-    would freeze /health, /chat, and /tts for all clients).
+    Yield one event per completed assistant message, then done or error.
+    Event types: assistant, done, error.
     """
-    global _last_llm_warm_ts
-    t0 = time.time()
-    init_vertex_ai()
-    out = {
-        "status": "ok",
-        "service": "terpene-api",
-        "vertex_initialized": VERTEX_AI_INITIALIZED and VERTEX_AI_AVAILABLE,
-        "llm_ping": False,
-    }
-    if not VERTEX_AI_AVAILABLE:
-        out["note"] = "Vertex AI unavailable; container only warmed"
-        out["elapsed_ms"] = int((time.time() - t0) * 1000)
-        return out
-
-    now = time.time()
-    if now - _last_llm_warm_ts < LLM_WARM_MIN_INTERVAL_SEC:
-        out["llm_ping_skipped"] = True
-        out["llm_ping_skip_sec"] = round(LLM_WARM_MIN_INTERVAL_SEC - (now - _last_llm_warm_ts), 1)
-        out["elapsed_ms"] = int((time.time() - t0) * 1000)
-        return out
-
-    try:
-        GenerativeModel = get_generative_model()
-        try:
-            from vertexai.generative_models import GenerationConfig
-
-            gen_cfg = GenerationConfig(max_output_tokens=8, candidate_count=1, temperature=0)
-        except Exception:
-            gen_cfg = None
-
-        model = GenerativeModel(
-            model_name="gemini-2.0-flash-001",
-            system_instruction="Reply with exactly the single word: OK",
-        )
-        if gen_cfg is not None:
-            model.generate_content(".", generation_config=gen_cfg)
-        else:
-            model.generate_content(".")
-        _last_llm_warm_ts = time.time()
-        out["llm_ping"] = True
-    except Exception as e:
-        out["llm_ping_error"] = str(e)[:200]
-    out["elapsed_ms"] = int((time.time() - t0) * 1000)
-    return out
-
-
-@app.post("/chat")
-def chat(request: ChatRequest):
-    """
-    POST /chat
-    Body: message, active_terpenes, conversation_history,
-    optional autoplay_panel_minutes (0–15): host+guests keep taking turns for ~that many minutes.
-
-    Sync route (thread pool): Vertex SDK calls are blocking and must not stall the event loop.
-    """
-    init_vertex_ai()
-    if not VERTEX_AI_AVAILABLE:
-        raise HTTPException(status_code=500, detail="Vertex AI not available")
-
     try:
         GenerativeModel = get_generative_model()
         message = request.message
@@ -749,7 +682,7 @@ def chat(request: ChatRequest):
 
         responding_terpenes = detect_mentioned_terpenes(message, active_terpenes, conversation_history)
 
-        responses = []
+        responses: List[Dict[str, str]] = []
         updated_history = list(conversation_history)
         updated_history.append({"role": "user", "content": message})
 
@@ -839,6 +772,7 @@ def chat(request: ChatRequest):
             updated_history.append(
                 {"role": "assistant", "content": assistant_text, "terpene_id": terpene_id}
             )
+            yield {"type": "assistant", "terpene_id": terpene_id, "response": assistant_text}
 
             if terpene_id == "terpenequeen":
                 try:
@@ -910,6 +844,7 @@ def chat(request: ChatRequest):
                                         "terpene_id": invited_id,
                                     }
                                 )
+                                yield {"type": "assistant", "terpene_id": invited_id, "response": invited_text}
                             except Exception as inv_err:
                                 err_msg = str(inv_err)
                                 print(f"DEBUG: invited guest {invited_id} error: {err_msg}")
@@ -922,8 +857,8 @@ def chat(request: ChatRequest):
                                         "terpene_id": invited_id,
                                     }
                                 )
+                                yield {"type": "assistant", "terpene_id": invited_id, "response": err_resp}
 
-                        # Host closing: after guest(s) spoke, one beat toward the human (skip if autoplay will continue)
                         panel_guest_ids = set(_panel_guests(active_terpenes))
                         if (
                             ap_min <= 0
@@ -980,24 +915,136 @@ def chat(request: ChatRequest):
                                             "terpene_id": "terpenequeen",
                                         }
                                     )
+                                    yield {"type": "assistant", "terpene_id": "terpenequeen", "response": c_text}
                             except Exception as close_err:
                                 print(f"DEBUG: host closing beat: {close_err}")
                 except Exception as invite_outer:
                     print(f"DEBUG: invitation block: {invite_outer}")
 
         if ap_min > 0:
-            run_panel_autoplay(
+            for piece in iter_panel_autoplay(
                 GenerativeModel,
                 active_terpenes,
                 updated_history,
-                responses,
                 ap_min,
-            )
+            ):
+                yield {
+                    "type": "assistant",
+                    "terpene_id": piece["terpene_id"],
+                    "response": piece["response"],
+                }
 
-        return ChatResponse(responses=responses, conversation_history=updated_history)
-
+        yield {"type": "done", "conversation_history": updated_history}
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+        yield {"type": "error", "detail": str(e)}
+
+
+@app.get("/health")
+async def health():
+    """Health check"""
+    return {"status": "ok", "service": "terpene-api"}
+
+
+@app.get("/warm")
+def warm():
+    """
+    Wake Cloud Run, initialize Vertex, and optionally run a tiny LLM call so the first
+    real /chat is faster. Safe to call from the browser on page load (idempotent).
+
+    Implemented as a **sync** route so FastAPI runs it in a thread pool; Vertex
+    `generate_content` is blocking and must not run on the asyncio event loop (that
+    would freeze /health, /chat, and /tts for all clients).
+    """
+    global _last_llm_warm_ts
+    t0 = time.time()
+    init_vertex_ai()
+    out = {
+        "status": "ok",
+        "service": "terpene-api",
+        "vertex_initialized": VERTEX_AI_INITIALIZED and VERTEX_AI_AVAILABLE,
+        "llm_ping": False,
+    }
+    if not VERTEX_AI_AVAILABLE:
+        out["note"] = "Vertex AI unavailable; container only warmed"
+        out["elapsed_ms"] = int((time.time() - t0) * 1000)
+        return out
+
+    now = time.time()
+    if now - _last_llm_warm_ts < LLM_WARM_MIN_INTERVAL_SEC:
+        out["llm_ping_skipped"] = True
+        out["llm_ping_skip_sec"] = round(LLM_WARM_MIN_INTERVAL_SEC - (now - _last_llm_warm_ts), 1)
+        out["elapsed_ms"] = int((time.time() - t0) * 1000)
+        return out
+
+    try:
+        GenerativeModel = get_generative_model()
+        try:
+            from vertexai.generative_models import GenerationConfig
+
+            gen_cfg = GenerationConfig(max_output_tokens=8, candidate_count=1, temperature=0)
+        except Exception:
+            gen_cfg = None
+
+        model = GenerativeModel(
+            model_name="gemini-2.0-flash-001",
+            system_instruction="Reply with exactly the single word: OK",
+        )
+        if gen_cfg is not None:
+            model.generate_content(".", generation_config=gen_cfg)
+        else:
+            model.generate_content(".")
+        _last_llm_warm_ts = time.time()
+        out["llm_ping"] = True
+    except Exception as e:
+        out["llm_ping_error"] = str(e)[:200]
+    out["elapsed_ms"] = int((time.time() - t0) * 1000)
+    return out
+
+
+@app.post("/chat")
+def chat(request: ChatRequest):
+    """
+    POST /chat — same logic as /chat/stream, aggregated into one JSON response (backward compatible).
+    """
+    init_vertex_ai()
+    if not VERTEX_AI_AVAILABLE:
+        raise HTTPException(status_code=500, detail="Vertex AI not available")
+
+    responses: List[Dict[str, str]] = []
+    final_history: List[Dict[str, str]] = []
+    err_detail: Optional[str] = None
+    for ev in iter_chat_events(request):
+        t = ev.get("type")
+        if t == "assistant":
+            responses.append({"terpene_id": ev["terpene_id"], "response": ev["response"]})
+        elif t == "done":
+            final_history = ev.get("conversation_history") or []
+        elif t == "error":
+            err_detail = ev.get("detail", "Unknown error")
+    if err_detail:
+        raise HTTPException(status_code=500, detail=err_detail)
+    return ChatResponse(responses=responses, conversation_history=final_history)
+
+
+@app.post("/chat/stream")
+def chat_stream(request: ChatRequest):
+    """
+    SSE (text/event-stream): one JSON object per line after `data:` for each assistant message,
+    then {"type":"done","conversation_history":...} or {"type":"error","detail":...}.
+    """
+    init_vertex_ai()
+    if not VERTEX_AI_AVAILABLE:
+
+        def err_gen():
+            yield _sse_line({"type": "error", "detail": "Vertex AI not available"})
+
+        return StreamingResponse(err_gen(), media_type="text/event-stream")
+
+    def event_gen():
+        for ev in iter_chat_events(request):
+            yield _sse_line(ev)
+
+    return StreamingResponse(event_gen(), media_type="text/event-stream")
 
 
 @app.post("/stt")
