@@ -646,6 +646,8 @@
     /** TTS clips play one-after-another (panel); avoids overlap and helps autoplay after async fetch. */
     let ttsPlayQueue = [];
     let ttsPlayQueueBusy = false;
+    /** Bumps only on stopAll or user takeover; sequential panel clips share the same generation. */
+    let ttsInvalidateGen = 0;
     /** Kept open and resumed so autoplay after async TTS is more likely to succeed. */
     let sharedMediaAudioCtx = null;
     let ttsGestureRetryListener = null;
@@ -692,6 +694,61 @@
       document.addEventListener('pointerdown', ttsGestureRetryListener, { capture: true });
     }
 
+    /** Stop every assistant clip and clear the queue (e.g. new user send so voices do not stack). */
+    function stopAllAssistantTtsPlayback() {
+      ttsInvalidateGen++;
+      ttsPlayQueue.length = 0;
+      ttsPlayQueueBusy = false;
+      const root = document.getElementById('messages');
+      if (root) {
+        root.querySelectorAll('.message.assistant audio').forEach((el) => {
+          try {
+            el.pause();
+            el.currentTime = 0;
+          } catch (_) {}
+        });
+      }
+    }
+
+    /** Only one assistant voice at a time: pause every other assistant clip before starting the next. */
+    function pauseOtherAssistantAudioExcept(keep) {
+      const root = document.getElementById('messages');
+      if (!root || !keep) return;
+      root.querySelectorAll('.message.assistant audio').forEach((el) => {
+        if (el === keep) return;
+        try {
+          el.pause();
+        } catch (_) {}
+      });
+    }
+
+    /**
+     * Only one assistant voice at a time. Runs on every assistant <audio> `play` (queue or user).
+     * User-started play invalidates the pump epoch, clears the queue, and releases busy so nothing stacks.
+     */
+    function onAssistantAudioExclusivePlay(ev) {
+      const el = ev.target;
+      if (!el || el.tagName !== 'AUDIO') return;
+      const root = document.getElementById('messages');
+      if (!root || !root.contains(el)) return;
+      if (!el.closest('.message.assistant')) return;
+
+      const queueDriven = el.getAttribute('data-tts-from-queue') === '1';
+
+      if (!queueDriven) {
+        ttsPlayQueue.length = 0;
+        ttsInvalidateGen++;
+        ttsPlayQueueBusy = false;
+      }
+
+      root.querySelectorAll('.message.assistant audio').forEach((a) => {
+        if (a === el) return;
+        try {
+          if (!a.paused) a.pause();
+        } catch (_) {}
+      });
+    }
+
     function pumpTtsPlaybackQueue() {
       if (ttsPlayQueueBusy || !ttsPlayQueue.length) return;
       const a = ttsPlayQueue.shift();
@@ -700,20 +757,49 @@
         return;
       }
       ttsPlayQueueBusy = true;
+      const invAtStart = ttsInvalidateGen;
       primeAudioPlaybackUnlock();
       let finished = false;
       const advanceOnce = () => {
         if (finished) return;
+        if (invAtStart !== ttsInvalidateGen) {
+          finished = true;
+          return;
+        }
         finished = true;
+        try {
+          a.removeAttribute('data-tts-from-queue');
+        } catch (_) {}
         ttsPlayQueueBusy = false;
         pumpTtsPlaybackQueue();
       };
       a.addEventListener('ended', advanceOnce, { once: true });
       a.addEventListener('error', advanceOnce, { once: true });
       const tryPlay = () => {
-        const p = a.play();
+        if (finished) return;
+        if (invAtStart !== ttsInvalidateGen) {
+          finished = true;
+          return;
+        }
+        pauseOtherAssistantAudioExcept(a);
+        try {
+          a.setAttribute('data-tts-from-queue', '1');
+        } catch (_) {}
+        let p;
+        try {
+          p = a.play();
+        } catch (err) {
+          try {
+            a.removeAttribute('data-tts-from-queue');
+          } catch (_) {}
+          advanceOnce();
+          return;
+        }
         if (p && typeof p.then === 'function') {
           p.catch((err) => {
+            try {
+              a.removeAttribute('data-tts-from-queue');
+            } catch (_) {}
             if (err && err.name === 'NotAllowedError') {
               ttsPlayQueue.unshift(a);
               ttsPlayQueueBusy = false;
@@ -732,6 +818,48 @@
       if (!audioEl) return;
       ttsPlayQueue.push(audioEl);
       pumpTtsPlaybackQueue();
+    }
+
+    /**
+     * After a clip was queued for autoplay, wait until it has finished playing.
+     * Do not resolve early while audio is still buffering — that let the next clip enqueue and talk over this one.
+     * Long "never started" timeout covers autoplay-blocked tabs without cutting off slow networks too soon.
+     */
+    function waitForAssistantAudioToFinish(audio) {
+      if (!audio) return Promise.resolve();
+      return new Promise((resolve) => {
+        if (audio.ended) {
+          resolve();
+          return;
+        }
+        let settled = false;
+        const maxTimer = setTimeout(finish, 960000);
+        const startupWatch = setTimeout(() => {
+          if (audio.paused && !audio.ended && audio.currentTime < 0.05) finish();
+        }, 90000);
+        function cleanup() {
+          clearTimeout(maxTimer);
+          clearTimeout(startupWatch);
+          audio.removeEventListener('ended', onEnd);
+          audio.removeEventListener('error', onEnd);
+          audio.removeEventListener('playing', onPlaying);
+        }
+        function finish() {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          resolve();
+        }
+        function onPlaying() {
+          clearTimeout(startupWatch);
+        }
+        function onEnd() {
+          finish();
+        }
+        audio.addEventListener('playing', onPlaying, { once: true });
+        audio.addEventListener('ended', onEnd, { once: true });
+        audio.addEventListener('error', onEnd, { once: true });
+      });
     }
 
     function sleep(ms) {
@@ -772,6 +900,80 @@
     }
 
     /**
+     * Legacy POST /chat (single JSON). Used when /chat/stream is 404 (API not redeployed yet).
+     */
+    async function runChatWithJsonFallback(userText, historyForApi, signal) {
+      const autoplayMin = document.getElementById('panelAutoplay15')?.checked ? 15 : 0;
+      const res = await fetch(`${API_URL}/chat`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          message: userText,
+          active_terpenes: activeTerpenes,
+          conversation_history: historyForApi || [],
+          autoplay_panel_minutes: autoplayMin,
+        }),
+        signal,
+      });
+      if (!res.ok) {
+        let detail = await res.text();
+        try {
+          const j = JSON.parse(detail);
+          detail = j.detail || detail;
+        } catch (_) {}
+        throw new Error(detail || `Request failed (${res.status})`);
+      }
+      const data = await res.json();
+      const rollingHistory = [...(historyForApi || []), { role: 'user', content: userText }];
+      let lastAssistantText = '';
+
+      if (data.responses && Array.isArray(data.responses) && data.responses.length > 0) {
+        for (let i = 0; i < data.responses.length; i++) {
+          const resp = data.responses[i];
+          const tid = resp.terpene_id || resp.terpeneId || activeTerpenes[0];
+          const text = resp.response;
+          if (i === 0) {
+            stopThinkingStatus();
+            await sleep(Math.min(380, Math.max(90, Math.floor(initialAssistantDelayMs(userText) / 3))));
+          } else {
+            await sleep(humanPauseMsBeforeNext(lastAssistantText));
+          }
+          const el = addMessage('assistant', text, null, tid);
+          rollingHistory.push({ role: 'assistant', content: text, terpene_id: tid });
+          conversationHistory = rollingHistory.map((m) => ({ ...m }));
+          lastAssistantText = String(text || '').trim();
+          if (el) {
+            const tts = await attachTtsToMessageEl(el, text, tid);
+            if (tts.didQueue && tts.audio) await waitForAssistantAudioToFinish(tts.audio);
+          }
+        }
+        if (Array.isArray(data.conversation_history)) {
+          conversationHistory = data.conversation_history;
+        }
+        const lastResp = data.responses[data.responses.length - 1];
+        lastAssistantText = (lastResp && lastResp.response ? String(lastResp.response) : '').trim();
+      } else {
+        stopThinkingStatus();
+        await sleep(initialAssistantDelayMs(userText));
+        const assistantMessage = data.response || data.responses?.[0]?.response;
+        const terpeneId = data.responses?.[0]?.terpene_id || activeTerpenes[0];
+        const el = addMessage('assistant', assistantMessage, null, terpeneId);
+        rollingHistory.push({
+          role: 'assistant',
+          content: assistantMessage,
+          terpene_id: terpeneId,
+        });
+        conversationHistory = data.conversation_history || rollingHistory.map((m) => ({ ...m }));
+        lastAssistantText = String(assistantMessage || '').trim();
+        if (el) {
+          const tts = await attachTtsToMessageEl(el, assistantMessage, terpeneId);
+          if (tts.didQueue && tts.audio) await waitForAssistantAudioToFinish(tts.audio);
+        }
+      }
+      return lastAssistantText;
+    }
+
+    /**
      * Stream assistant messages as they are generated; supports AbortSignal for new sends.
      * @param {string} userText
      * @param {object[]} historyForApi conversation_history **without** this user turn (server appends it).
@@ -783,6 +985,7 @@
       const timeoutMs = autoplayMin > 0 ? 970000 : 180000;
 
       activeChatAbortController?.abort();
+      stopAllAssistantTtsPlayback();
       const ctrl = new AbortController();
       activeChatAbortController = ctrl;
       const timeoutId = setTimeout(() => ctrl.abort(), timeoutMs);
@@ -807,6 +1010,11 @@
           }),
           signal: ctrl.signal,
         });
+
+        if (res.status === 404) {
+          lastAssistantText = await runChatWithJsonFallback(userText, historyForApi, ctrl.signal);
+          return { aborted: false, lastAssistantText };
+        }
 
         if (!res.ok) {
           let detail = await res.text();
@@ -833,7 +1041,10 @@
             conversationHistory = rollingHistory.map((m) => ({ ...m }));
             lastAssistantText = String(text || '').trim();
             assistantIndex += 1;
-            if (el) await attachTtsToMessageEl(el, text, tid);
+            if (el) {
+              const tts = await attachTtsToMessageEl(el, text, tid);
+              if (tts.didQueue && tts.audio) await waitForAssistantAudioToFinish(tts.audio);
+            }
           } else if (t === 'done') {
             if (Array.isArray(ev.conversation_history)) {
               conversationHistory = ev.conversation_history;
@@ -996,9 +1207,10 @@
             'terpenequeen'
           );
           primeAudioPlaybackUnlock();
-          await attachTtsToMessageEl(greetingEl, firstTerpene.greeting, 'terpenequeen', {
+          const tts = await attachTtsToMessageEl(greetingEl, firstTerpene.greeting, 'terpenequeen', {
             forceAutoplay: true,
           });
+          if (tts.didQueue && tts.audio) await waitForAssistantAudioToFinish(tts.audio);
         }, 550);
       }
     }
@@ -1051,7 +1263,10 @@
      * @param {{ forceAutoplay?: boolean }} [opts] — if forceAutoplay, queue playback even when the autoplay checkbox is off (used for the opening greeting).
      */
     async function attachTtsToMessageEl(messageDiv, text, terpeneId, opts) {
-      if (!API_URL || !messageDiv || !text || !String(text).trim()) return;
+      const result = { audio: null, didQueue: false };
+      if (!API_URL || !messageDiv || !text || !String(text).trim()) return result;
+      /** If stopAll / new send runs while /tts is in flight, do not enqueue — that overlapped voices. */
+      const ttsInvWhenAttachStarted = ttsInvalidateGen;
       const tid = terpeneId || activeTerpenes[0] || 'terpenequeen';
       try {
         const ttsFormData = new FormData();
@@ -1065,7 +1280,7 @@
             messageDiv,
             'Voice audio failed to load (HTTP ' + ttsResponse.status + '). You can still read the text above.'
           );
-          return;
+          return result;
         }
         const mime =
           ttsResponse.headers.get('content-type') || 'audio/mpeg';
@@ -1073,12 +1288,12 @@
         if (!buf || buf.byteLength < 64) {
           console.error('TTS empty or tiny body', buf && buf.byteLength);
           showTtsLoadError(messageDiv, 'Voice audio response was empty.');
-          return;
+          return result;
         }
         const audioBlob = new Blob([buf], { type: mime.split(';')[0].trim() || 'audio/mpeg' });
         const audioUrl = URL.createObjectURL(audioBlob);
         const contentDiv = messageDiv.querySelector('.message-content');
-        if (!contentDiv) return;
+        if (!contentDiv) return result;
         let audioControls = contentDiv.querySelector('.audio-controls');
         if (!audioControls) {
           audioControls = document.createElement('div');
@@ -1089,27 +1304,34 @@
         }
         const audio = document.createElement('audio');
         audio.src = audioUrl;
-        audio.setAttribute('autoplay', '');
+        // Do not set HTML autoplay — it races the queue and lets multiple clips speak at once.
         audio.controls = true;
         audio.preload = 'auto';
         audio.setAttribute('playsinline', '');
         audio.playsInline = true;
         audio.style.width = '100%';
         audio.style.minWidth = '200px';
-        audio.setAttribute('aria-label', 'Spoken reply (autoplay when allowed)');
+        audio.setAttribute('aria-label', 'Spoken reply (queued when autoplay is on)');
         try {
           audio.load();
         } catch (_) {}
+        try {
+          audio.pause();
+          audio.currentTime = 0;
+        } catch (_) {}
         audioControls.appendChild(audio);
-        const queuePlay =
-          (opts && opts.forceAutoplay) || isVoiceAutoplayEnabled();
-        if (queuePlay) {
+        const wantAuto = (opts && opts.forceAutoplay) || isVoiceAutoplayEnabled();
+        if (wantAuto && ttsInvWhenAttachStarted === ttsInvalidateGen) {
           enqueueAssistantTtsPlayback(audio);
+          result.didQueue = true;
         }
+        result.audio = audio;
+        return result;
       } catch (e) {
         console.warn('TTS failed:', e);
         showTtsLoadError(messageDiv, 'Voice audio error: ' + (e.message || 'network'));
       }
+      return result;
     }
 
     function addMessage(role, content, audioUrl = null, terpeneId = null, at = null) {
@@ -1181,6 +1403,7 @@
       if (!message) return;
 
       primeAudioPlaybackUnlock();
+      stopAllAssistantTtsPlayback();
 
       const historyForApi = [...conversationHistory];
       addMessage('user', message);
@@ -1483,6 +1706,10 @@
 
     // Set up event listeners after DOM is ready
     document.addEventListener('DOMContentLoaded', function() {
+      const messagesEl = document.getElementById('messages');
+      if (messagesEl) {
+        messagesEl.addEventListener('play', onAssistantAudioExclusivePlay, true);
+      }
       const chatEl = document.getElementById('chatContainer');
       if (chatEl) {
         chatEl.addEventListener(

@@ -6,7 +6,7 @@ from fastapi import FastAPI, UploadFile, File, HTTPException, Form, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, Dict, Iterator, List, Optional, Tuple
 import asyncio
 import os
 import json
@@ -435,86 +435,143 @@ def _pick_guest_round_robin(active_terpenes: List[str], conversation_history: Li
     return guests[n % len(guests)]
 
 
+# Extra phrases that count as addressing TerpeneQueen / Susan (not generic topic words).
+_DIRECT_ADDRESS_EXTRA: Dict[str, List[str]] = {
+    "terpenequeen": [
+        "susan",
+        "terpene queen",
+        "susan trapp",
+        "dr. trapp",
+        "dr trapp",
+        "professor trapp",
+    ],
+}
+
+
+def _direct_address_tokens_for(terpene_id: str) -> List[str]:
+    """Unambiguous tokens: id, persona display name, and curated phrases (word-boundary or multi-word)."""
+    out: List[str] = []
+    tid = (terpene_id or "").strip().lower()
+    if tid:
+        out.append(tid)
+    try:
+        from terpenes import get_terpene
+
+        nm = (get_terpene(terpene_id).get("name") or "").strip().lower()
+        if nm and nm not in out:
+            out.append(nm)
+    except Exception:
+        pass
+    for x in _DIRECT_ADDRESS_EXTRA.get(terpene_id, []):
+        xl = x.strip().lower()
+        if xl and xl not in out:
+            out.append(xl)
+    # Longer tokens first so "beta-caryophyllene" is tried before "caryophyllene" if both listed
+    return sorted(set(out), key=len, reverse=True)
+
+
+def _token_match_start(message: str, token: str) -> Optional[int]:
+    """Start index in message where token appears as a direct reference, or None."""
+    t = (token or "").strip().lower()
+    if not t:
+        return None
+    parts = [p for p in re.split(r"[\s\-]+", t) if p]
+    if len(parts) > 1:
+        pat = r"(?i)" + r"\s+".join(re.escape(p) for p in parts)
+        m = re.search(pat, message)
+        return m.start() if m else None
+    if len(parts[0]) < 2:
+        return None
+    m = re.search(rf"(?i)\b{re.escape(parts[0])}\b", message)
+    return m.start() if m else None
+
+
+def _first_direct_address_pos(message: str, terpene_id: str) -> Optional[int]:
+    best: Optional[int] = None
+    for tok in _direct_address_tokens_for(terpene_id):
+        pos = _token_match_start(message, tok)
+        if pos is not None and (best is None or pos < best):
+            best = pos
+    return best
+
+
+def _terpenes_directly_addressed(message: str, active_terpenes: List[str]) -> List[str]:
+    """
+    If the user names one or more terpenes by id, display name, or curated phrase,
+    return those ids in order of first mention. Otherwise [].
+    Does not use loose topic words (e.g. 'lemon', 'lavender') so general questions still use panel routing.
+    """
+    if not (message or "").strip() or not active_terpenes:
+        return []
+    hits: List[Tuple[int, str]] = []
+    seen = set()
+    for tid in active_terpenes:
+        if tid in seen:
+            continue
+        pos = _first_direct_address_pos(message, tid)
+        if pos is not None:
+            hits.append((pos, tid))
+            seen.add(tid)
+    hits.sort(key=lambda x: x[0])
+    return [tid for _, tid in hits]
+
+
 def detect_mentioned_terpenes(
     message: str,
     active_terpenes: List[str],
     conversation_history: Optional[List[Dict]] = None,
 ) -> List[str]:
-    """Detect which terpenes are mentioned or should respond (panel routing when TerpeneQueen + guests)."""
+    """Choose who speaks: direct address -> only those terpenes; else panel / topic routing."""
     conversation_history = conversation_history or []
     message_lower = message.lower()
-    mentioned = []
 
-    terpene_aliases = {
-        "terpenequeen": ["terpenequeen", "susan", "susan trapp", "terpene queen"],
-        "limonene": ["limonene", "lemon", "citrus"],
-        "myrcene": ["myrcene"],
-        "pinene": ["pinene", "alpha-pinene", "pine"],
-        "linalool": ["linalool", "lavender"],
-        "caryophyllene": ["caryophyllene", "beta-caryophyllene", "pepper", "clove"],
-        "humulene": ["humulene", "hop"],
-        "terpinolene": ["terpinolene"],
-        "ocimene": ["ocimene", "basil"],
-        "bisabolol": ["bisabolol", "chamomile"],
-        "geraniol": ["geraniol", "rose", "geranium"],
-    }
+    direct = _terpenes_directly_addressed(message, active_terpenes)
+    if direct:
+        return direct
 
-    for terpene_id in active_terpenes:
-        if terpene_id.lower() in message_lower:
-            mentioned.append(terpene_id)
-            continue
-        aliases = terpene_aliases.get(terpene_id, [])
-        for alias in aliases:
-            if alias in message_lower:
-                mentioned.append(terpene_id)
-                break
+    if any(word in message_lower for word in ["all", "everyone", "panel", "you all", "what do you"]):
+        return active_terpenes
+    if len(active_terpenes) == 1:
+        return active_terpenes
 
-    if not mentioned:
-        if any(word in message_lower for word in ["all", "everyone", "panel", "you all", "what do you"]):
-            return active_terpenes
-        if len(active_terpenes) == 1:
-            return active_terpenes
+    guests = _panel_guests(active_terpenes)
+    has_tq = any(t.lower() == "terpenequeen" for t in active_terpenes)
 
-        guests = _panel_guests(active_terpenes)
-        has_tq = any(t.lower() == "terpenequeen" for t in active_terpenes)
-
-        if not guests:
-            return [active_terpenes[0]]
-
-        if has_tq and len(guests) >= 1:
-            # First API request: let TerpeneQueen host so she can invite guests in one round.
-            # Otherwise keywords like "focus" route straight to Pinene and the panel "stops" there.
-            if not conversation_history:
-                return ["terpenequeen"]
-            last = _last_assistant_terpene_id(conversation_history)
-            if last and last != "terpenequeen" and last in guests:
-                return ["terpenequeen"]
-            science_cues = (
-                "the science", "science behind", "about science", "scientific",
-                "mechanism", "receptors", "receptor", "pathway", "biochemistry",
-                "neurotransmitter", "gaba", "cb1", "cb2", "endocannabinoid",
-                "how does it work", "how do they work", "at the molecular", "evidence for",
-            )
-            if last == "terpenequeen":
-                prev_tid = _prev_assistant_terpene_id(conversation_history)
-                # Guest spoke, then host "closing beat" — user is usually replying to Susan, not the guest.
-                if prev_tid and prev_tid in guests:
-                    return ["terpenequeen"]
-                hit = _topic_match_guest(message_lower, guests)
-                if hit:
-                    return [hit]
-                if any(cue in message_lower for cue in science_cues):
-                    nxt = _pick_guest_round_robin(active_terpenes, conversation_history)
-                    if nxt:
-                        return [nxt]
-                nxt = _pick_guest_round_robin(active_terpenes, conversation_history)
-                return [nxt] if nxt else [guests[0]]
-            rr = _pick_guest_round_robin(active_terpenes, conversation_history)
-            return [rr] if rr else [guests[0]]
-
+    if not guests:
         return [active_terpenes[0]]
 
-    return list(set(mentioned))
+    if has_tq and len(guests) >= 1:
+        # First API request: let TerpeneQueen host so she can invite guests in one round.
+        # Otherwise keywords like "focus" route straight to Pinene and the panel "stops" there.
+        if not conversation_history:
+            return ["terpenequeen"]
+        last = _last_assistant_terpene_id(conversation_history)
+        if last and last != "terpenequeen" and last in guests:
+            return ["terpenequeen"]
+        science_cues = (
+            "the science", "science behind", "about science", "scientific",
+            "mechanism", "receptors", "receptor", "pathway", "biochemistry",
+            "neurotransmitter", "gaba", "cb1", "cb2", "endocannabinoid",
+            "how does it work", "how do they work", "at the molecular", "evidence for",
+        )
+        if last == "terpenequeen":
+            prev_tid = _prev_assistant_terpene_id(conversation_history)
+            # Guest spoke, then host "closing beat" — user is usually replying to Susan, not the guest.
+            if prev_tid and prev_tid in guests:
+                return ["terpenequeen"]
+            hit = _topic_match_guest(message_lower, guests)
+            if hit:
+                return [hit]
+            if any(cue in message_lower for cue in science_cues):
+                nxt = _pick_guest_round_robin(active_terpenes, conversation_history)
+                if nxt:
+                    return [nxt]
+            nxt = _pick_guest_round_robin(active_terpenes, conversation_history)
+            return [nxt] if nxt else [guests[0]]
+        rr = _pick_guest_round_robin(active_terpenes, conversation_history)
+        return [rr] if rr else [guests[0]]
+
+    return [active_terpenes[0]]
 
 
 def _vertex_response_text(response) -> Optional[str]:
