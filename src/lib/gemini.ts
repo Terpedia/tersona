@@ -109,11 +109,7 @@ IMPORTANT: Never break character. You ARE ${terpene.name}, not an AI pretending 
 
 // Client-side helper for browser
 export class BrowserGeminiClient {
-  private apiKey: string;
-
-  constructor(apiKey: string) {
-    this.apiKey = apiKey;
-  }
+  constructor(_apiKey?: string) {}
 
   async chat(
     terpene: TerpenePersona,
@@ -126,8 +122,7 @@ export class BrowserGeminiClient {
       body: JSON.stringify({
         terpeneId: terpene.id,
         message: userMessage,
-        history: conversationHistory,
-        apiKey: this.apiKey
+        history: conversationHistory
       })
     });
 

@@ -615,10 +615,12 @@
   </div>
 
   <script type="module">
-    // Single API URL for all endpoints (chat, STT, TTS)
-    // Default to deployed Cloud Function URL
+    // Voice API URL for STT/TTS. Chat now goes through the Supabase tersona-chat edge function.
     const DEFAULT_API_URL = 'https://gemini-proxy-nanrsdlaoa-uc.a.run.app';
     let API_URL = localStorage.getItem('api_url') || DEFAULT_API_URL;
+    const DEFAULT_TERSONA_CHAT_URL = window.TERSONA_CHAT_URL || '';
+    let TERSONA_CHAT_URL = localStorage.getItem('tersona_chat_url') || DEFAULT_TERSONA_CHAT_URL;
+    let TERSONA_CHAT_KEY = localStorage.getItem('tersona_chat_key') || window.TERSONA_CHAT_KEY || '';
     
     // Save default URL if not already set
     if (!localStorage.getItem('api_url')) {
@@ -899,19 +901,21 @@
       }
     }
 
-    /**
-     * Legacy POST /chat (single JSON). Used when /chat/stream is 404 (API not redeployed yet).
-     */
-    async function runChatWithJsonFallback(userText, historyForApi, signal) {
-      const autoplayMin = document.getElementById('panelAutoplay15')?.checked ? 15 : 0;
-      const res = await fetch(`${API_URL}/chat`, {
+    async function runTersonaEdgeChat(userText, historyForApi, signal) {
+      if (!TERSONA_CHAT_URL) {
+        throw new Error('Tersona chat edge URL is not configured. Set localStorage.tersona_chat_url to your Supabase functions URL.');
+      }
+      const headers = { 'Content-Type': 'application/json' };
+      if (TERSONA_CHAT_KEY) {
+        headers['x-tersona-chat-key'] = TERSONA_CHAT_KEY;
+      }
+      const res = await fetch(TERSONA_CHAT_URL, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           message: userText,
-          active_terpenes: activeTerpenes,
-          conversation_history: historyForApi || [],
-          autoplay_panel_minutes: autoplayMin,
+          activeTerpenes,
+          conversationHistory: historyForApi || [],
         }),
         signal,
       });
@@ -927,48 +931,22 @@
       const rollingHistory = [...(historyForApi || []), { role: 'user', content: userText }];
       let lastAssistantText = '';
 
-      if (data.responses && Array.isArray(data.responses) && data.responses.length > 0) {
-        for (let i = 0; i < data.responses.length; i++) {
-          const resp = data.responses[i];
-          const tid = resp.terpene_id || resp.terpeneId || activeTerpenes[0];
-          const text = resp.response;
-          if (i === 0) {
-            stopThinkingStatus();
-            await sleep(Math.min(380, Math.max(90, Math.floor(initialAssistantDelayMs(userText) / 3))));
-          } else {
-            await sleep(humanPauseMsBeforeNext(lastAssistantText));
-          }
-          const el = addMessage('assistant', text, null, tid);
-          rollingHistory.push({ role: 'assistant', content: text, terpene_id: tid });
-          conversationHistory = rollingHistory.map((m) => ({ ...m }));
-          lastAssistantText = String(text || '').trim();
-          if (el) {
-            const tts = await attachTtsToMessageEl(el, text, tid);
-            if (tts.didQueue && tts.audio) await waitForAssistantAudioToFinish(tts.audio);
-          }
-        }
-        if (Array.isArray(data.conversation_history)) {
-          conversationHistory = data.conversation_history;
-        }
-        const lastResp = data.responses[data.responses.length - 1];
-        lastAssistantText = (lastResp && lastResp.response ? String(lastResp.response) : '').trim();
-      } else {
-        stopThinkingStatus();
-        await sleep(initialAssistantDelayMs(userText));
-        const assistantMessage = data.response || data.responses?.[0]?.response;
-        const terpeneId = data.responses?.[0]?.terpene_id || activeTerpenes[0];
-        const el = addMessage('assistant', assistantMessage, null, terpeneId);
-        rollingHistory.push({
-          role: 'assistant',
-          content: assistantMessage,
-          terpene_id: terpeneId,
-        });
-        conversationHistory = data.conversation_history || rollingHistory.map((m) => ({ ...m }));
-        lastAssistantText = String(assistantMessage || '').trim();
-        if (el) {
-          const tts = await attachTtsToMessageEl(el, assistantMessage, terpeneId);
-          if (tts.didQueue && tts.audio) await waitForAssistantAudioToFinish(tts.audio);
-        }
+      stopThinkingStatus();
+      await sleep(initialAssistantDelayMs(userText));
+      const assistantMessage = data.response;
+      const terpeneId = data.tersona?.id || activeTerpenes[0] || 'terpenequeen';
+      const el = addMessage('assistant', assistantMessage, null, terpeneId);
+      rollingHistory.push({
+        role: 'assistant',
+        content: assistantMessage,
+        terpene_id: terpeneId,
+        tersonaId: terpeneId,
+      });
+      conversationHistory = rollingHistory.map((m) => ({ ...m }));
+      lastAssistantText = String(assistantMessage || '').trim();
+      if (el) {
+        const tts = await attachTtsToMessageEl(el, assistantMessage, terpeneId);
+        if (tts.didQueue && tts.audio) await waitForAssistantAudioToFinish(tts.audio);
       }
       return lastAssistantText;
     }
@@ -979,8 +957,6 @@
      * @param {object[]} historyForApi conversation_history **without** this user turn (server appends it).
      */
     async function runChatWithStream(userText, historyForApi) {
-      if (!API_URL) throw new Error('API URL not configured. Please enter your Cloud Function URL.');
-
       const autoplayMin = document.getElementById('panelAutoplay15')?.checked ? 15 : 0;
       const timeoutMs = autoplayMin > 0 ? 970000 : 180000;
 
@@ -996,65 +972,7 @@
       let streamError = null;
 
       try {
-        const res = await fetch(`${API_URL}/chat/stream`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Accept: 'text/event-stream',
-          },
-          body: JSON.stringify({
-            message: userText,
-            active_terpenes: activeTerpenes,
-            conversation_history: historyForApi || [],
-            autoplay_panel_minutes: autoplayMin,
-          }),
-          signal: ctrl.signal,
-        });
-
-        if (res.status === 404) {
-          lastAssistantText = await runChatWithJsonFallback(userText, historyForApi, ctrl.signal);
-          return { aborted: false, lastAssistantText };
-        }
-
-        if (!res.ok) {
-          let detail = await res.text();
-          try {
-            const j = JSON.parse(detail);
-            detail = j.detail || detail;
-          } catch (_) {}
-          throw new Error(detail || `Request failed (${res.status})`);
-        }
-
-        await consumeChatEventStream(res, async (ev) => {
-          const t = ev && ev.type;
-          if (t === 'assistant') {
-            const tid = ev.terpene_id || activeTerpenes[0];
-            const text = ev.response;
-            if (assistantIndex === 0) {
-              stopThinkingStatus();
-              await sleep(Math.min(380, Math.max(90, Math.floor(initialAssistantDelayMs(userText) / 3))));
-            } else {
-              await sleep(humanPauseMsBeforeNext(lastAssistantText));
-            }
-            const el = addMessage('assistant', text, null, tid);
-            rollingHistory.push({ role: 'assistant', content: text, terpene_id: tid });
-            conversationHistory = rollingHistory.map((m) => ({ ...m }));
-            lastAssistantText = String(text || '').trim();
-            assistantIndex += 1;
-            if (el) {
-              const tts = await attachTtsToMessageEl(el, text, tid);
-              if (tts.didQueue && tts.audio) await waitForAssistantAudioToFinish(tts.audio);
-            }
-          } else if (t === 'done') {
-            if (Array.isArray(ev.conversation_history)) {
-              conversationHistory = ev.conversation_history;
-            } else {
-              conversationHistory = rollingHistory;
-            }
-          } else if (t === 'error') {
-            streamError = ev.detail || 'Stream error';
-          }
-        });
+        lastAssistantText = await runTersonaEdgeChat(userText, historyForApi, ctrl.signal);
 
         if (streamError) throw new Error(streamError);
       } catch (e) {
@@ -1191,6 +1109,8 @@
 
     async function loadApiUrl() {
       API_URL = localStorage.getItem('api_url') || DEFAULT_API_URL;
+      TERSONA_CHAT_URL = localStorage.getItem('tersona_chat_url') || DEFAULT_TERSONA_CHAT_URL;
+      TERSONA_CHAT_KEY = localStorage.getItem('tersona_chat_key') || window.TERSONA_CHAT_KEY || '';
       primeBackendWarm();
 
       // Show chat interface directly (API URL is set by default)

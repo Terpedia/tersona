@@ -1,0 +1,2 @@
+[functions.tersona-chat]
+verify_jwt = false
